@@ -192,33 +192,104 @@ def export_ticket_pdf(items, total, pago=None, vuelto=None, medio_pago="Efectivo
     return buffer.getvalue()
 
 # ===================== EXPORTAR STOCK A PDF =====================
+# ===================== EXPORTAR STOCK A PDF (VERSIÓN MEJORADA) =====================
 def export_stock_to_pdf(df):
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    
+    # Datos de tu negocio (cambiá a los tuyos)
+    EMPRESA = "MI NEGOCIO"
+    DIRECCION = "Neuquén, Argentina"
+    
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=40, bottomMargin=40)
     elements = []
     styles = getSampleStyleSheet()
     
-    title = Paragraph(f"<b>REPORTE DE STOCK - {datetime.now().strftime('%d/%m/%Y %H:%M')}</b>", styles['Title'])
-    elements.append(title)
+    # Estilos personalizados
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Title'],
+        fontSize=16,
+        alignment=1,  # Centrado
+        spaceAfter=20,
+        textColor=colors.darkblue
+    )
+    
+    subtitle_style = ParagraphStyle(
+        'Subtitle',
+        parent=styles['Normal'],
+        fontSize=11,
+        alignment=1,
+        spaceAfter=25
+    )
+    
+    normal_style = ParagraphStyle(
+        'NormalStyle',
+        parent=styles['Normal'],
+        fontSize=10,
+        alignment=1,
+        spaceAfter=10
+    )
+    
+    # Header
+    elements.append(Paragraph(f"<b>{EMPRESA}</b>", title_style))
+    elements.append(Paragraph(DIRECCION, subtitle_style))
+    elements.append(Paragraph(f"<b>Reporte de Stock</b>", subtitle_style))
+    elements.append(Paragraph(f"Generado el: {datetime.now().strftime('%d/%m/%Y a las %H:%M:%S')}", normal_style))
     elements.append(Spacer(1, 20))
     
-    data = [["Nombre", "Categoría", "Precio", "Stock Actual", "Stock Mínimo", "Estado"]]
+    # Preparar datos de la tabla
+    data = [["Producto", "Categoría", "Precio Unit.", "Stock Actual", "Stock Mínimo", "Estado"]]
+    
     for _, row in df.iterrows():
-        estado = "⚠️ BAJO" if row['stock'] <= row['stock_minimo'] else "Normal"
+        estado = "Normal"
+        estado_color = colors.black
+        
+        if row['stock'] <= row['stock_minimo']:
+            estado = "¡STOCK BAJO!"
+            estado_color = colors.red
+        
         data.append([
-            row['nombre'], row['categoria'], f"${row['precio']:.2f}",
-            str(row['stock']), str(row['stock_minimo']), estado
+            Paragraph(row['nombre'], ParagraphStyle('name', parent=styles['Normal'], fontSize=9, alignment=0)),  # Izquierda
+            row['categoria'],
+            f"${row['precio']:.2f}",
+            str(row['stock']),
+            str(row['stock_minimo']),
+            Paragraph(estado, ParagraphStyle('estado', parent=styles['Normal'], fontSize=9, textColor=estado_color, alignment=1))
         ])
     
-    table = Table(data, colWidths=[90, 60, 50, 40, 50, 50])
+    # Crear tabla con mejor estilo
+    col_widths = [140, 70, 55, 50, 55, 70]
+    table = Table(data, colWidths=col_widths, repeatRows=1)
+    
     table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.grey),
+        # Encabezado
+        ('BACKGROUND', (0,0), (-1,0), colors.darkblue),
         ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('FONTSIZE', (0,0), (-1,-1), 10),
-        ('GRID', (0,0), (-1,-1), 1, colors.black),
+        ('ALIGN', (0,0), (-1,0), 'CENTER'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,0), 10),
+        ('BOTTOMPADDING', (0,0), (-1,0), 12),
+        
+        # Cuerpo de la tabla
+        ('BACKGROUND', (0,1), (-1,-1), colors.white),
+        ('GRID', (0,0), (-1,-1), 1, colors.grey),
+        ('ALIGN', (2,1), (4,-1), 'RIGHT'),      # Precios y stocks a la derecha
+        ('ALIGN', (0,1), (1,-1), 'LEFT'),       # Nombre y categoría a la izquierda
+        ('FONTSIZE', (0,1), (-1,-1), 9),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.whitesmoke, colors.white]),
+        
+        # Bordes más suaves
+        ('BOX', (0,0), (-1,-1), 2, colors.darkblue),
     ]))
+    
     elements.append(table)
+    elements.append(Spacer(1, 30))
+    
+    # Pie de página
+    elements.append(Paragraph("Este reporte fue generado automáticamente por el Sistema de Gestión de Stock.", 
+                             ParagraphStyle('Footer', parent=styles['Normal'], fontSize=8, alignment=1, textColor=colors.grey)))
+    
     doc.build(elements)
     buffer.seek(0)
     return buffer.getvalue()
