@@ -336,125 +336,39 @@ elif menu == "📋 Ver Stock":
                 )
 
 # ===================== REGISTRAR VENTA =====================
-elif menu == "📉 Registrar Venta":
-    st.header("📉 Registrar Venta")
+# ===================== REIMPRIMIR TICKET =====================
+elif menu == "🔄 Reimprimir Ticket":
+    st.header("🔄 Reimprimir Ticket Anterior")
     
-    if "cart" not in st.session_state:
-        st.session_state.cart = []
-    if "last_ticket" not in st.session_state:
-        st.session_state.last_ticket = None
+    conn = get_connection()
+    df_tickets = pd.read_sql_query("""
+        SELECT DISTINCT 
+            strftime('%d/%m/%Y %H:%M', fecha) as fecha_hora,
+            (SELECT valor FROM config WHERE clave='ultimo_ticket') as ticket_num,
+            GROUP_CONCAT(p.nombre) as productos,
+            SUM(m.total) as total_venta
+        FROM movimientos m
+        JOIN productos p ON m.producto_id = p.id
+        WHERE m.tipo = 'venta'
+        GROUP BY m.fecha
+        ORDER BY m.fecha DESC
+        LIMIT 15
+    """, conn)
+    conn.close()
     
-    df = obtener_productos()
-    
-    if df.empty:
-        st.warning("Primero agrega productos desde '➕ Agregar Producto'")
+    if df_tickets.empty:
+        st.info("Aún no hay tickets para reimprimir.")
     else:
-        buscar = st.text_input("🔍 Buscar producto", key="buscar_venta")
-        opciones = df["nombre"].tolist()
-        if buscar:
-            opciones = [p for p in opciones if buscar.lower() in p.lower()]
+        st.write("Selecciona un ticket reciente para reimprimir:")
+        ticket_sel = st.selectbox(
+            "Ticket",
+            options=range(len(df_tickets)),
+            format_func=lambda x: f"Ticket #{df_tickets.iloc[x]['ticket_num']:05d} - {df_tickets.iloc[x]['fecha_hora']} - ${df_tickets.iloc[x]['total_venta']:.2f}"
+        )
         
-        if opciones:
-            producto_sel = st.selectbox("Seleccionar Producto", opciones, key="sel_producto")
-            row = df[df["nombre"] == producto_sel].iloc[0]
-            
-            stock_actual = int(row['stock'])
-            
-            st.info(f"**Stock actual:** {stock_actual} unidades | Precio: **${row['precio']:.2f}**")
-            
-            # Evitamos el error cuando stock = 0
-            if stock_actual <= 0:
-                st.error("❌ Este producto no tiene stock disponible.")
-            else:
-                col1, col2 = st.columns([3,1])
-                with col1:
-                    cantidad = st.number_input(
-                        "Cantidad", 
-                        min_value=1, 
-                        max_value=stock_actual, 
-                        value=1, 
-                        key="cant_venta"
-                    )
-                with col2:
-                    if st.button("➕ Agregar al carrito"):
-                        st.session_state.cart.append({
-                            "id": int(row["id"]),
-                            "nombre": row["nombre"],
-                            "cantidad": cantidad,
-                            "precio": float(row["precio"]),
-                            "subtotal": cantidad * float(row["precio"])
-                        })
-                        st.success(f"✅ {row['nombre']} agregado")
-                        st.rerun()
-        
-        st.subheader("🛒 Carrito")
-        if st.session_state.cart:
-            for i, item in enumerate(st.session_state.cart):
-                col_a, col_b = st.columns([5,1])
-                with col_a:
-                    st.write(f"• **{item['nombre']}** ×{item['cantidad']} → **${item['subtotal']:.2f}**")
-                with col_b:
-                    if st.button("🗑️", key=f"del_{i}"):
-                        del st.session_state.cart[i]
-                        st.rerun()
-            
-            total = sum(item["subtotal"] for item in st.session_state.cart)
-            st.divider()
-            st.metric("TOTAL A PAGAR", f"${total:,.2f}")
-            
-            medio_pago = st.selectbox(
-                "💳 Medio de Pago",
-                ["Efectivo", "Transferencia", "Tarjeta Débito", "Tarjeta Crédito", "Otro"],
-                index=0
-            )
-            
-            pago = st.number_input("💵 Monto recibido", min_value=total, value=total, format="%.2f")
-            vuelto = pago - total
-            
-            if st.button("✅ Finalizar Venta y Generar Ticket", type="primary"):
-                todo_ok = True
-                for item in st.session_state.cart:
-                    exito, msg = registrar_movimiento("venta", item["id"], item["cantidad"], item["precio"])
-                    if not exito:
-                        st.error(msg)
-                        todo_ok = False
-                        break
-                
-                if todo_ok:
-                    st.success("🎉 ¡Venta registrada correctamente!")
-                    
-                    pdf_bytes = export_ticket_pdf(
-                        items=st.session_state.cart,
-                        total=total,
-                        pago=pago,
-                        vuelto=vuelto,
-                        medio_pago=medio_pago
-                    )
-                    
-                    st.session_state.last_ticket = {
-                        "pdf": pdf_bytes,
-                        "filename": f"ticket_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-                    }
-                    
-                    st.session_state.cart = []
-                    st.rerun()
-        
-        else:
-            st.info("Agregá productos al carrito para vender")
-        
-        if st.session_state.last_ticket is not None:
-            st.subheader("🧾 Ticket generado")
-            st.download_button(
-                label="📄 Descargar Ticket PDF",
-                data=st.session_state.last_ticket["pdf"],
-                file_name=st.session_state.last_ticket["filename"],
-                mime="application/pdf",
-                type="primary"
-            )
-            if st.button("Nueva venta (limpiar)"):
-                st.session_state.last_ticket = None
-                st.rerun()
-
+        if st.button("🖨️ Reimprimir Ticket Seleccionado", type="primary"):
+            st.warning("Funcionalidad de reimpresión completa estará disponible pronto. Por ahora solo mostramos los tickets recientes.")
+            st.dataframe(df_tickets.iloc[[ticket_sel]])
 # ===================== AGREGAR PRODUCTO =====================
 elif menu == "➕ Agregar Producto":
     st.header("➕ Agregar Nuevo Producto")
