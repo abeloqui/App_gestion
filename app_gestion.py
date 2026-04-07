@@ -188,7 +188,6 @@ def export_ticket_pdf(items, total, pago=None, vuelto=None, medio_pago="Efectivo
     t_num = ticket_num if ticket_num else get_next_ticket_number()
     cajero_name = cajero if cajero else st.session_state.username
     
-    # Header
     elements.append(Paragraph(f"<b>{EMPRESA}</b>", title_style))
     elements.append(Paragraph(DIRECCION, header_style))
     elements.append(Paragraph(f"Tel: {TELEFONO}", header_style))
@@ -202,7 +201,6 @@ def export_ticket_pdf(items, total, pago=None, vuelto=None, medio_pago="Efectivo
     elements.append(Paragraph("─" * 30, header_style))
     elements.append(Spacer(1, 8))
     
-    # Tabla productos
     data = [["Producto", "Cant", "Precio", "Subtotal"]]
     for item in items:
         data.append([item["nombre"][:23], str(item["cantidad"]), f"${item['precio']:.2f}", f"${item['subtotal']:.2f}"])
@@ -249,12 +247,65 @@ else:
 menu = st.sidebar.selectbox("Menú Principal", opciones)
 st.sidebar.success(f"👤 {st.session_state.username} ({st.session_state.role})")
 
+# ===================== DASHBOARD =====================
+if menu == "🏠 Dashboard":
+    st.header("🏠 Dashboard - Resumen")
+    df_prod = obtener_productos()
+    df_mov = pd.read_sql_query('SELECT * FROM movimientos ORDER BY fecha DESC', get_connection())
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1: st.metric("Total Productos", len(df_prod))
+    with col2: st.metric("Valor Inventario", f"${(df_prod['stock'] * df_prod['precio']).sum():,.2f}")
+    with col3:
+        hoy = datetime.now().strftime("%Y-%m-%d")
+        ventas_hoy = df_mov[(df_mov["tipo"] == "venta") & (df_mov["fecha"].str.startswith(hoy))]["total"].sum() if not df_mov.empty else 0
+        st.metric("Ventas Hoy", f"${ventas_hoy:,.2f}")
+    with col4:
+        hace_7 = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        ventas_sem = df_mov[(df_mov["tipo"] == "venta") & (df_mov["fecha"] >= hace_7)]["total"].sum() if not df_mov.empty else 0
+        st.metric("Ventas Semana", f"${ventas_sem:,.2f}")
+
+# ===================== VER STOCK =====================
+elif menu == "📋 Ver Stock":
+    st.header("📋 Stock Actual")
+    df = obtener_productos()
+    
+    if df.empty:
+        st.warning("No hay productos registrados aún.")
+    else:
+        categoria_filtro = st.selectbox("Filtrar por categoría", ["Todas"] + sorted(df["categoria"].unique().tolist()))
+        df_filtrado = df[df["categoria"] == categoria_filtro] if categoria_filtro != "Todas" else df.copy()
+        
+        st.dataframe(df_filtrado[["nombre", "categoria", "precio", "stock", "stock_minimo"]], use_container_width=True)
+        
+        bajos = df_filtrado[df_filtrado["stock"] <= df_filtrado["stock_minimo"]]
+        if not bajos.empty:
+            st.error(f"⚠️ {len(bajos)} producto(s) con stock bajo:")
+            st.dataframe(bajos[["nombre", "stock", "stock_minimo"]])
+        
+        st.subheader("📤 Exportar Stock")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("📄 Exportar a PDF", type="primary"):
+                # Aquí iría la función export_stock_to_pdf si la tienes
+                st.info("Exportación a PDF de stock pendiente de implementar")
+        with col2:
+            if st.button("📊 Exportar a Excel"):
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    df_filtrado.to_excel(writer, sheet_name='Stock', index=False)
+                output.seek(0)
+                st.download_button("Descargar Excel", output, f"stock_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", 
+                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
 # ===================== REGISTRAR VENTA =====================
 elif menu == "📉 Registrar Venta":
     st.header("📉 Registrar Venta")
     
-    if "cart" not in st.session_state: st.session_state.cart = []
-    if "last_ticket" not in st.session_state: st.session_state.last_ticket = None
+    if "cart" not in st.session_state:
+        st.session_state.cart = []
+    if "last_ticket" not in st.session_state:
+        st.session_state.last_ticket = None
     
     df = obtener_productos()
     
@@ -292,7 +343,8 @@ elif menu == "📉 Registrar Venta":
         if st.session_state.cart:
             for i, item in enumerate(st.session_state.cart):
                 col_a, col_b = st.columns([5,1])
-                with col_a: st.write(f"• **{item['nombre']}** ×{item['cantidad']} → **${item['subtotal']:.2f}**")
+                with col_a:
+                    st.write(f"• **{item['nombre']}** ×{item['cantidad']} → **${item['subtotal']:.2f}**")
                 with col_b:
                     if st.button("🗑️", key=f"del_{i}"):
                         del st.session_state.cart[i]
@@ -323,7 +375,7 @@ elif menu == "📉 Registrar Venta":
                     
                     st.session_state.last_ticket = {"pdf": pdf_bytes, "filename": f"ticket_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"}
                     st.session_state.cart = []
-                    st.success("✅ Venta registrada y ticket generado")
+                    st.success("✅ Venta registrada")
                     st.rerun()
         
         else:
@@ -339,7 +391,7 @@ elif menu == "📉 Registrar Venta":
                 st.session_state.last_ticket = None
                 st.rerun()
 
-# ===================== REIMPRIMIR TICKET (CORREGIDO Y FUNCIONAL) =====================
+# ===================== REIMPRIMIR TICKET =====================
 elif menu == "🔄 Reimprimir Ticket":
     st.header("🔄 Reimprimir Ticket Anterior")
     
@@ -356,9 +408,9 @@ elif menu == "🔄 Reimprimir Ticket":
         st.info("Aún no hay tickets para reimprimir.")
     else:
         opciones = [f"Ticket #{row['ticket_num']:05d} — {row['fecha']} — ${row['total']:.2f}" for _, row in df_ventas.iterrows()]
-        seleccion = st.selectbox("Seleccionar ticket para reimprimir", opciones)
+        seleccion = st.selectbox("Seleccionar ticket", opciones)
         
-        if st.button("🖨️ Generar y Descargar Ticket", type="primary"):
+        if st.button("🖨️ Descargar Ticket para Imprimir", type="primary"):
             idx = opciones.index(seleccion)
             ticket_num = df_ventas.iloc[idx]['ticket_num']
             venta = obtener_venta_para_reimpresion(ticket_num)
@@ -372,9 +424,9 @@ elif menu == "🔄 Reimprimir Ticket":
                     fecha=venta['fecha'],
                     cajero=venta['cajero']
                 )
-                st.success(f"Ticket #{venta['ticket_num']:05d} listo para imprimir")
+                st.success(f"Ticket #{venta['ticket_num']:05d} listo")
                 st.download_button(
-                    label="📄 Descargar Ticket para Imprimir",
+                    label="📄 Descargar PDF para Imprimir",
                     data=pdf_bytes,
                     file_name=f"ticket_{venta['ticket_num']:05d}.pdf",
                     mime="application/pdf",
@@ -383,14 +435,10 @@ elif menu == "🔄 Reimprimir Ticket":
             else:
                 st.error("No se pudo recuperar el ticket.")
 
-# ===================== OTRAS SECCIONES (resumidas) =====================
-# (Dashboard, Ver Stock, Agregar, Editar, Compra, Reportes, Historial)
-# ... mantengo las secciones principales sin cambios mayores para no alargar ...
-
 # ===================== CERRAR SESIÓN =====================
 if st.sidebar.button("Cerrar Sesión"):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.rerun()
 
-st.sidebar.caption("✅ Ticket optimizado para Xprinter + Reimpresión completa")
+st.sidebar.caption("✅ Ticket optimizado para Xprinter + Reimpresión")
