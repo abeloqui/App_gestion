@@ -306,7 +306,7 @@ elif menu == "📉 Registrar Venta":
     df = obtener_productos()
     
     if df.empty:
-        st.warning("Primero agrega productos")
+        st.warning("Primero agrega productos desde '➕ Agregar Producto'")
     else:
         buscar = st.text_input("🔍 Buscar producto", key="buscar_venta")
         opciones = df["nombre"].tolist()
@@ -317,22 +317,34 @@ elif menu == "📉 Registrar Venta":
             producto_sel = st.selectbox("Seleccionar Producto", opciones, key="sel_producto")
             row = df[df["nombre"] == producto_sel].iloc[0]
             
-            st.info(f"**Stock actual:** {row['stock']} | Precio: **${row['precio']:.2f}**")
+            stock_actual = int(row['stock'])
             
-            col1, col2 = st.columns([3,1])
-            with col1:
-                cantidad = st.number_input("Cantidad", min_value=1, max_value=int(row['stock']), value=1, key="cant_venta")
-            with col2:
-                if st.button("➕ Agregar al carrito"):
-                    st.session_state.cart.append({
-                        "id": int(row["id"]),
-                        "nombre": row["nombre"],
-                        "cantidad": cantidad,
-                        "precio": float(row["precio"]),
-                        "subtotal": cantidad * float(row["precio"])
-                    })
-                    st.success(f"✅ {row['nombre']} agregado")
-                    st.rerun()
+            st.info(f"**Stock actual:** {stock_actual} unidades | Precio: **${row['precio']:.2f}**")
+            
+            # Evitamos el error cuando stock = 0
+            if stock_actual <= 0:
+                st.error("❌ Este producto no tiene stock disponible.")
+            else:
+                col1, col2 = st.columns([3,1])
+                with col1:
+                    cantidad = st.number_input(
+                        "Cantidad", 
+                        min_value=1, 
+                        max_value=stock_actual, 
+                        value=1, 
+                        key="cant_venta"
+                    )
+                with col2:
+                    if st.button("➕ Agregar al carrito"):
+                        st.session_state.cart.append({
+                            "id": int(row["id"]),
+                            "nombre": row["nombre"],
+                            "cantidad": cantidad,
+                            "precio": float(row["precio"]),
+                            "subtotal": cantidad * float(row["precio"])
+                        })
+                        st.success(f"✅ {row['nombre']} agregado")
+                        st.rerun()
         
         st.subheader("🛒 Carrito")
         if st.session_state.cart:
@@ -387,7 +399,7 @@ elif menu == "📉 Registrar Venta":
                     st.rerun()
         
         else:
-            st.info("Agregá productos al carrito")
+            st.info("Agregá productos al carrito para vender")
         
         if st.session_state.last_ticket is not None:
             st.subheader("🧾 Ticket generado")
@@ -398,7 +410,7 @@ elif menu == "📉 Registrar Venta":
                 mime="application/pdf",
                 type="primary"
             )
-            if st.button("Nueva venta"):
+            if st.button("Nueva venta (limpiar)"):
                 st.session_state.last_ticket = None
                 st.rerun()
 
