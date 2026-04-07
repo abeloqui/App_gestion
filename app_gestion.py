@@ -264,7 +264,62 @@ if menu == "🏠 Dashboard":
         hace_7 = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
         ventas_sem = df_mov[(df_mov["tipo"] == "venta") & (df_mov["fecha"] >= hace_7)]["total"].sum() if not df_mov.empty else 0
         st.metric("Ventas Semana", f"${ventas_sem:,.2f}")
+def export_stock_to_pdf(df):
+    buffer = BytesIO()
+    # Usamos A4 para el reporte de stock
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    # Estilos
+    title_style = ParagraphStyle('Title', parent=styles['Title'], fontSize=18, alignment=1, spaceAfter=10)
+    fecha_style = ParagraphStyle('Normal', parent=styles['Normal'], fontSize=10, alignment=2, spaceAfter=20)
+    
+    # Encabezado
+    elements.append(Paragraph("Reporte de Stock Actual", title_style))
+    elements.append(Paragraph(f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", fecha_style))
+    
+    # Preparar datos de la tabla
+    # Convertimos el DataFrame a una lista de listas
+    data = [["Nombre del Producto", "Categoría", "Precio", "Stock", "Mínimo"]]
+    for _, row in df.iterrows():
+        data.append([
+            row['nombre'], 
+            row['categoria'], 
+            f"${row['precio']:.2f}", 
+            str(row['stock']), 
+            str(row['stock_minimo'])
+        ])
+    
+    # Crear Tabla
+    # Definimos anchos de columna proporcionales para A4 (aprox 170mm útiles)
+    table = Table(data, colWidths=[60*mm, 40*mm, 25*mm, 20*mm, 25*mm])
+    
+    style = TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('FONTSIZE', (0, 1), (-1, -1), 10),
+        ('ALIGN', (0, 1), (0, -1), 'LEFT'), # Alinea nombres a la izquierda
+    ])
+    
+    # Resaltar en rojo los productos con stock bajo
+    for i, (_, row) in enumerate(df.iterrows(), start=1):
+        if row['stock'] <= row['stock_minimo']:
+            style.add('TEXTCOLOR', (3, i), (3, i), colors.red)
+            style.add('FONTNAME', (3, i), (3, i), 'Helvetica-Bold')
 
+    table.setStyle(style)
+    elements.append(table)
+    
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
 # ===================== VER STOCK =====================
 elif menu == "📋 Ver Stock":
     st.header("📋 Stock Actual")
