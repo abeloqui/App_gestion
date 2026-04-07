@@ -77,6 +77,16 @@ def init_db():
         FOREIGN KEY(producto_id) REFERENCES productos(id)
     )''')
     
+    c.execute('''CREATE TABLE IF NOT EXISTS ventas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticket_num INTEGER,
+        fecha TEXT,
+        cajero TEXT,
+        total REAL,
+        medio_pago TEXT,
+        items TEXT
+    )''')
+    
     c.execute('''CREATE TABLE IF NOT EXISTS config (
         clave TEXT PRIMARY KEY,
         valor INTEGER
@@ -126,59 +136,91 @@ def obtener_productos():
     conn.close()
     return df
 
-# ===================== TICKET DE VENTA - VERSIÓN MEJORADA =====================
-def export_ticket_pdf(items, total, pago=None, vuelto=None, medio_pago="Efectivo"):
+def guardar_venta(ticket_num, items, total, medio_pago):
+    conn = get_connection()
+    c = conn.cursor()
+    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    items_json = str(items)
+    c.execute('''INSERT INTO ventas (ticket_num, fecha, cajero, total, medio_pago, items)
+                 VALUES (?, ?, ?, ?, ?, ?)''', 
+              (ticket_num, fecha, st.session_state.username, total, medio_pago, items_json))
+    conn.commit()
+    conn.close()
+
+def obtener_venta_para_reimpresion(ticket_num):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM ventas WHERE ticket_num = ? ORDER BY id DESC LIMIT 1", (ticket_num,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {
+            "ticket_num": row[1],
+            "fecha": row[2],
+            "cajero": row[3],
+            "total": row[4],
+            "medio_pago": row[5],
+            "items": eval(row[6])
+        }
+    return None
+
+# ===================== TICKET DE VENTA - VERSIÓN FINAL (BLANCO Y NEGRO + CENTRADO) =====================
+def export_ticket_pdf(items, total, pago=None, vuelto=None, medio_pago="Efectivo", ticket_num=None, fecha=None, cajero=None):
     buffer = BytesIO()
     
     EMPRESA = "MI NEGOCIO"           
     DIRECCION = "Neuquén, Argentina" 
     TELEFONO = "299-1234567"         
     
-    doc = SimpleDocTemplate(buffer, pagesize=(80*mm, 297*mm), rightMargin=5*mm, leftMargin=5*mm, topMargin=5*mm)
+    doc = SimpleDocTemplate(buffer, pagesize=(80*mm, 297*mm), rightMargin=6*mm, leftMargin=6*mm, topMargin=6*mm)
     elements = []
     styles = getSampleStyleSheet()
     
-    title_style = ParagraphStyle('TitleStyle', parent=styles['Title'], fontSize=14, alignment=1, spaceAfter=8, textColor=colors.darkblue)
-    header_style = ParagraphStyle('Header', parent=styles['Normal'], fontSize=9, alignment=1, spaceAfter=4)
+    # Estilos en blanco y negro (más elegantes y legibles)
+    title_style = ParagraphStyle('Title', parent=styles['Title'], fontSize=13, alignment=1, spaceAfter=6)
+    header_style = ParagraphStyle('Header', parent=styles['Normal'], fontSize=9, alignment=1, spaceAfter=3)
     bold_style = ParagraphStyle('Bold', parent=styles['Normal'], fontSize=10, alignment=1, spaceAfter=6)
-    total_style = ParagraphStyle('TotalStyle', parent=styles['Title'], fontSize=13, alignment=1, textColor=colors.darkgreen)
-    thanks_style = ParagraphStyle('Thanks', parent=styles['Normal'], fontSize=10, alignment=1)
+    total_style = ParagraphStyle('Total', parent=styles['Title'], fontSize=12, alignment=1, spaceAfter=8)
+    thanks_style = ParagraphStyle('Thanks', parent=styles['Normal'], fontSize=9.5, alignment=1, spaceAfter=10)
     
-    now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    ticket_num = get_next_ticket_number()
+    now = fecha if fecha else datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    t_num = ticket_num if ticket_num else get_next_ticket_number()
+    cajero_name = cajero if cajero else st.session_state.username
     
+    # Header centrado
     elements.append(Paragraph(f"<b>{EMPRESA}</b>", title_style))
     elements.append(Paragraph(DIRECCION, header_style))
     elements.append(Paragraph(f"Tel: {TELEFONO}", header_style))
-    elements.append(Spacer(1, 8))
+    elements.append(Spacer(1, 10))
     
-    elements.append(Paragraph(f"<b>Ticket #{ticket_num:05d}</b>", bold_style))
+    elements.append(Paragraph(f"<b>Ticket #{t_num:05d}</b>", bold_style))
     elements.append(Paragraph(f"Fecha: {now}", header_style))
-    elements.append(Paragraph(f"Cajero: {st.session_state.username}", header_style))
+    elements.append(Paragraph(f"Cajero: {cajero_name}", header_style))
+    elements.append(Spacer(1, 12))
+    
+    # Línea separadora
+    elements.append(Paragraph("─" * 32, header_style))
     elements.append(Spacer(1, 10))
     
-    elements.append(Paragraph("═" * 28, header_style))
-    elements.append(Spacer(1, 10))
-    
+    # Tabla de productos
     data = [["Producto", "Cant.", "Precio", "Subtotal"]]
     for item in items:
         data.append([
-            Paragraph(item["nombre"][:22], ParagraphStyle('prod', parent=styles['Normal'], fontSize=9, alignment=0)),
+            item["nombre"][:24],
             str(item["cantidad"]),
             f"${item['precio']:.2f}",
             f"${item['subtotal']:.2f}"
         ])
     
-    table = Table(data, colWidths=[33*mm, 9*mm, 16*mm, 17*mm])
+    table = Table(data, colWidths=[34*mm, 10*mm, 15*mm, 16*mm])
     table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.darkblue),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
         ('ALIGN', (0,0), (-1,0), 'CENTER'),
         ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
         ('FONTSIZE', (0,0), (-1,-1), 8.5),
-        ('GRID', (0,0), (-1,-1), 0.8, colors.grey),
+        ('GRID', (0,0), (-1,-1), 0.7, colors.black),
         ('ALIGN', (2,1), (3,-1), 'RIGHT'),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
     ]))
     elements.append(table)
     
@@ -186,63 +228,49 @@ def export_ticket_pdf(items, total, pago=None, vuelto=None, medio_pago="Efectivo
     elements.append(Paragraph(f"<b>TOTAL: ${total:.2f}</b>", total_style))
     
     if pago is not None and vuelto is not None:
-        elements.append(Spacer(1, 6))
+        elements.append(Spacer(1, 5))
         elements.append(Paragraph(f"Pagado: ${pago:.2f}", header_style))
         elements.append(Paragraph(f"<b>Vuelto: ${vuelto:.2f}</b>", bold_style))
     
     elements.append(Spacer(1, 10))
-    elements.append(Paragraph(f"<b>Medio de Pago:</b> {medio_pago}", bold_style))
+    elements.append(Paragraph(f"Medio de Pago: {medio_pago}", bold_style))
     
-    elements.append(Spacer(1, 18))
+    elements.append(Spacer(1, 20))
     elements.append(Paragraph("¡Gracias por su compra!", thanks_style))
-    elements.append(Paragraph("Esperamos verte pronto ❤️", header_style))
-    elements.append(Spacer(1, 10))
-    elements.append(Paragraph("═" * 28, header_style))
+    elements.append(Paragraph("Esperamos verte pronto", header_style))
+    elements.append(Spacer(1, 8))
+    elements.append(Paragraph("─" * 32, header_style))
     
     doc.build(elements)
     buffer.seek(0)
     return buffer.getvalue()
 
-# ===================== EXPORTAR STOCK A PDF (MEJORADO) =====================
+# ===================== EXPORTAR STOCK A PDF =====================
 def export_stock_to_pdf(df):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=40)
     elements = []
     styles = getSampleStyleSheet()
     
-    EMPRESA = "MI NEGOCIO"
-    DIRECCION = "Neuquén, Argentina"
+    elements.append(Paragraph(f"<b>REPORTE DE STOCK</b>", styles['Title']))
+    elements.append(Paragraph(f"Generado el {datetime.now().strftime('%d/%m/%Y a las %H:%M')}", styles['Normal']))
+    elements.append(Spacer(1, 20))
     
-    title_style = ParagraphStyle('Title', parent=styles['Title'], fontSize=16, alignment=1, spaceAfter=20, textColor=colors.darkblue)
-    
-    elements.append(Paragraph(f"<b>{EMPRESA}</b>", title_style))
-    elements.append(Paragraph(DIRECCION, styles['Normal']))
-    elements.append(Paragraph(f"Reporte de Stock - {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", styles['Normal']))
-    elements.append(Spacer(1, 25))
-    
-    data = [["Producto", "Categoría", "Precio", "Stock Actual", "Stock Mínimo", "Estado"]]
+    data = [["Producto", "Categoría", "Precio", "Stock", "Mínimo", "Estado"]]
     for _, row in df.iterrows():
-        estado = "¡STOCK BAJO!" if row['stock'] <= row['stock_minimo'] else "Normal"
-        color = colors.red if row['stock'] <= row['stock_minimo'] else colors.black
-        data.append([
-            row['nombre'], row['categoria'], f"${row['precio']:.2f}",
-            str(row['stock']), str(row['stock_minimo']),
-            Paragraph(estado, ParagraphStyle('estado', parent=styles['Normal'], textColor=color))
-        ])
+        estado = "¡BAJO!" if row['stock'] <= row['stock_minimo'] else "Normal"
+        data.append([row['nombre'], row['categoria'], f"${row['precio']:.2f}", 
+                     str(row['stock']), str(row['stock_minimo']), estado])
     
-    table = Table(data, colWidths=[140, 70, 55, 50, 55, 70])
+    table = Table(data, colWidths=[120, 70, 60, 50, 50, 60])
     table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.darkblue),
+        ('BACKGROUND', (0,0), (-1,0), colors.grey),
         ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
         ('ALIGN', (0,0), (-1,0), 'CENTER'),
-        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-        ('GRID', (0,0), (-1,-1), 1, colors.grey),
+        ('GRID', (0,0), (-1,-1), 1, colors.black),
         ('ALIGN', (2,1), (4,-1), 'RIGHT'),
-        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.whitesmoke, colors.white]),
     ]))
     elements.append(table)
-    elements.append(Spacer(1, 30))
-    elements.append(Paragraph("Reporte generado automáticamente", styles['Normal']))
     
     doc.build(elements)
     buffer.seek(0)
@@ -299,24 +327,15 @@ elif menu == "📋 Ver Stock":
         with col1:
             if st.button("📄 Exportar a PDF", type="primary"):
                 pdf_bytes = export_stock_to_pdf(df_filtrado)
-                st.download_button(
-                    label="Descargar Reporte de Stock PDF",
-                    data=pdf_bytes,
-                    file_name=f"stock_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-                    mime="application/pdf"
-                )
+                st.download_button("Descargar Reporte PDF", pdf_bytes, f"stock_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf", "application/pdf")
         with col2:
             if st.button("📊 Exportar a Excel"):
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                     df_filtrado.to_excel(writer, sheet_name='Stock', index=False)
                 output.seek(0)
-                st.download_button(
-                    label="Descargar Stock Excel (.xlsx)",
-                    data=output,
-                    file_name=f"stock_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                st.download_button("Descargar Excel", output, f"stock_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", 
+                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ===================== REGISTRAR VENTA =====================
 elif menu == "📉 Registrar Venta":
@@ -330,7 +349,7 @@ elif menu == "📉 Registrar Venta":
     df = obtener_productos()
     
     if df.empty:
-        st.warning("Primero agrega productos desde '➕ Agregar Producto'")
+        st.warning("Primero agrega productos")
     else:
         buscar = st.text_input("🔍 Buscar producto", key="buscar_venta")
         opciones = df["nombre"].tolist()
@@ -342,11 +361,9 @@ elif menu == "📉 Registrar Venta":
             row = df[df["nombre"] == producto_sel].iloc[0]
             stock_actual = int(row['stock'])
             
-            st.info(f"**Stock actual:** {stock_actual} unidades | Precio: **${row['precio']:.2f}**")
+            st.info(f"**Stock actual:** {stock_actual} | Precio: **${row['precio']:.2f}**")
             
-            if stock_actual <= 0:
-                st.error("❌ Este producto no tiene stock disponible.")
-            else:
+            if stock_actual > 0:
                 col1, col2 = st.columns([3,1])
                 with col1:
                     cantidad = st.number_input("Cantidad", min_value=1, max_value=stock_actual, value=1, key="cant_venta")
@@ -361,6 +378,8 @@ elif menu == "📉 Registrar Venta":
                         })
                         st.success(f"✅ {row['nombre']} agregado")
                         st.rerun()
+            else:
+                st.error("❌ Sin stock disponible")
         
         st.subheader("🛒 Carrito")
         if st.session_state.cart:
@@ -392,14 +411,18 @@ elif menu == "📉 Registrar Venta":
                         break
                 
                 if todo_ok:
-                    st.success("🎉 ¡Venta registrada correctamente!")
-                    pdf_bytes = export_ticket_pdf(st.session_state.cart, total, pago, vuelto, medio_pago)
+                    ticket_num = get_next_ticket_number()
+                    st.success("🎉 Venta registrada correctamente!")
+                    
+                    pdf_bytes = export_ticket_pdf(st.session_state.cart, total, pago, vuelto, medio_pago, ticket_num)
+                    guardar_venta(ticket_num, st.session_state.cart, total, medio_pago)
+                    
                     st.session_state.last_ticket = {"pdf": pdf_bytes, "filename": f"ticket_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"}
                     st.session_state.cart = []
                     st.rerun()
         
         else:
-            st.info("Agregá productos al carrito para vender")
+            st.info("Agregá productos al carrito")
         
         if st.session_state.last_ticket is not None:
             st.subheader("🧾 Ticket generado")
@@ -411,34 +434,47 @@ elif menu == "📉 Registrar Venta":
                 st.session_state.last_ticket = None
                 st.rerun()
 
-# ===================== REIMPRIMIR TICKET =====================
+# ===================== REIMPRIMIR TICKET (COMPLETO) =====================
 elif menu == "🔄 Reimprimir Ticket":
     st.header("🔄 Reimprimir Ticket Anterior")
+    
     conn = get_connection()
-    df_tickets = pd.read_sql_query("""
-        SELECT 
-            fecha as fecha_hora,
-            COUNT(*) as items,
-            SUM(total) as total_venta
-        FROM movimientos 
-        WHERE tipo = 'venta'
-        GROUP BY fecha
+    df_ventas = pd.read_sql_query("""
+        SELECT ticket_num, fecha, cajero, total, medio_pago 
+        FROM ventas 
         ORDER BY fecha DESC
-        LIMIT 15
+        LIMIT 20
     """, conn)
     conn.close()
     
-    if df_tickets.empty:
+    if df_ventas.empty:
         st.info("Aún no hay tickets registrados.")
     else:
-        st.write("Selecciona un ticket para reimprimir:")
-        selected = st.selectbox(
-            "Tickets recientes",
-            options=range(len(df_tickets)),
-            format_func=lambda x: f"{df_tickets.iloc[x]['fecha_hora']} → ${df_tickets.iloc[x]['total_venta']:.2f} ({df_tickets.iloc[x]['items']} items)"
-        )
-        if st.button("🖨️ Reimprimir Ticket", type="primary"):
-            st.info("Funcionalidad completa de reimpresión estará disponible en la próxima actualización.")
+        opciones = [f"Ticket #{row['ticket_num']:05d} — {row['fecha']} — ${row['total']:.2f}" for _, row in df_ventas.iterrows()]
+        seleccion = st.selectbox("Seleccionar ticket", opciones)
+        
+        if st.button("🖨️ Reimprimir Ticket Seleccionado", type="primary"):
+            idx = opciones.index(seleccion)
+            ticket_num = df_ventas.iloc[idx]['ticket_num']
+            venta = obtener_venta_para_reimpresion(ticket_num)
+            
+            if venta:
+                pdf_bytes = export_ticket_pdf(
+                    items=venta['items'],
+                    total=venta['total'],
+                    medio_pago=venta['medio_pago'],
+                    ticket_num=venta['ticket_num'],
+                    fecha=venta['fecha'],
+                    cajero=venta['cajero']
+                )
+                st.success(f"Ticket #{venta['ticket_num']:05d} listo")
+                st.download_button(
+                    label="📄 Descargar Ticket para Imprimir",
+                    data=pdf_bytes,
+                    file_name=f"ticket_{venta['ticket_num']:05d}.pdf",
+                    mime="application/pdf",
+                    type="primary"
+                )
 
 # ===================== OTRAS SECCIONES =====================
 elif menu == "➕ Agregar Producto":
@@ -561,4 +597,4 @@ if st.sidebar.button("Cerrar Sesión"):
         del st.session_state[key]
     st.rerun()
 
-st.sidebar.caption("✅ Sistema con Ticket Mejorado + Reimpresión")
+st.sidebar.caption("✅ Ticket Blanco/Negro + Reimpresión Completa")
