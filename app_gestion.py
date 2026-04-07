@@ -1,10 +1,10 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-from datetime import datetime, timedelta 
+from datetime import datetime, timedelta
 from io import BytesIO
 
-# Para PDF
+# Para PDF y Reportes
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -22,8 +22,7 @@ if "logged_in" not in st.session_state:
 
 USUARIOS = {
     "admin": {"password": "1234", "role": "admin"},
-    "cajero1": {"password": "1234", "role": "cajero"},
-    "cajero2": {"password": "1234", "role": "cajero"}
+    "cajero1": {"password": "1234", "role": "cajero"}
 }
 
 def login():
@@ -51,7 +50,6 @@ def get_connection():
 def init_db():
     conn = get_connection()
     c = conn.cursor()
-    
     c.execute('''CREATE TABLE IF NOT EXISTS productos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nombre TEXT NOT NULL UNIQUE,
@@ -61,6 +59,7 @@ def init_db():
         categoria TEXT DEFAULT 'Otros'
     )''')
     
+    # Verificar columna categoria
     c.execute("PRAGMA table_info(productos)")
     columns = [info[1] for info in c.fetchall()]
     if "categoria" not in columns:
@@ -92,13 +91,13 @@ def init_db():
         valor INTEGER
     )''')
     c.execute("INSERT OR IGNORE INTO config (clave, valor) VALUES ('ultimo_ticket', 0)")
-    
     conn.commit()
     conn.close()
 
 init_db()
 
-# ===================== FUNCIONES =====================
+# ===================== FUNCIONES DE LÓGICA Y REPORTES =====================
+
 def get_next_ticket_number():
     conn = get_connection()
     c = conn.cursor()
@@ -128,7 +127,7 @@ def registrar_movimiento(tipo, producto_id, cantidad, precio_unitario):
                  VALUES (?, ?, ?, ?, ?, ?)''', (fecha, tipo, producto_id, cantidad, precio_unitario, total))
     conn.commit()
     conn.close()
-    return True, "✅ Venta registrada correctamente"
+    return True, "✅ Operación exitosa"
 
 def obtener_productos():
     conn = get_connection()
@@ -154,298 +153,180 @@ def obtener_venta_para_reimpresion(ticket_num):
     conn.close()
     if row:
         return {
-            "ticket_num": row[1],
-            "fecha": row[2],
-            "cajero": row[3],
-            "total": row[4],
-            "medio_pago": row[5],
-            "items": eval(row[6])
+            "ticket_num": row[1], "fecha": row[2], "cajero": row[3],
+            "total": row[4], "medio_pago": row[5], "items": eval(row[6])
         }
     return None
 
-# ===================== TICKET OPTIMIZADO PARA XPRINTER 80mm =====================
-def export_ticket_pdf(items, total, pago=None, vuelto=None, medio_pago="Efectivo", ticket_num=None, fecha=None, cajero=None):
+# --- GENERACIÓN DE PDF: STOCK ---
+def export_stock_to_pdf(df):
     buffer = BytesIO()
-    
-    EMPRESA = "MI NEGOCIO"           
-    DIRECCION = "Neuquén, Argentina" 
-    TELEFONO = "299-1234567"         
-    
-    # Márgenes ajustados para papel térmico 80mm
-    doc = SimpleDocTemplate(buffer, pagesize=(80*mm, 297*mm), 
-                           rightMargin=4*mm, leftMargin=4*mm, topMargin=5*mm, bottomMargin=5*mm)
-    
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=15*mm, leftMargin=15*mm, topMargin=15*mm, bottomMargin=15*mm)
     elements = []
     styles = getSampleStyleSheet()
     
-    title_style = ParagraphStyle('Title', parent=styles['Title'], fontSize=13, alignment=1, spaceAfter=6)
-    header_style = ParagraphStyle('Header', parent=styles['Normal'], fontSize=8.5, alignment=1, spaceAfter=3)
-    bold_style = ParagraphStyle('Bold', parent=styles['Normal'], fontSize=9.5, alignment=1, spaceAfter=5)
-    total_style = ParagraphStyle('Total', parent=styles['Title'], fontSize=12, alignment=1, spaceAfter=8)
-    thanks_style = ParagraphStyle('Thanks', parent=styles['Normal'], fontSize=9, alignment=1)
-    
-    now = fecha if fecha else datetime.now().strftime("%d/%m/%Y %H:%M")
-    t_num = ticket_num if ticket_num else get_next_ticket_number()
-    cajero_name = cajero if cajero else st.session_state.username
-    
-    elements.append(Paragraph(f"<b>{EMPRESA}</b>", title_style))
-    elements.append(Paragraph(DIRECCION, header_style))
-    elements.append(Paragraph(f"Tel: {TELEFONO}", header_style))
-    elements.append(Spacer(1, 8))
-    
-    elements.append(Paragraph(f"<b>Ticket #{t_num:05d}</b>", bold_style))
-    elements.append(Paragraph(f"Fecha: {now}", header_style))
-    elements.append(Paragraph(f"Cajero: {cajero_name}", header_style))
+    elements.append(Paragraph("<b>REPORTE DE STOCK ACTUAL</b>", styles['Title']))
+    elements.append(Paragraph(f"Fecha de reporte: {datetime.now().strftime('%d/%m/%Y %H:%M')}", styles['Normal']))
     elements.append(Spacer(1, 10))
     
-    elements.append(Paragraph("─" * 30, header_style))
-    elements.append(Spacer(1, 8))
+    data = [["Producto", "Categoría", "Precio", "Stock", "Mínimo"]]
+    for _, row in df.iterrows():
+        data.append([row['nombre'], row['categoria'], f"${row['precio']:.2f}", str(row['stock']), str(row['stock_minimo'])])
     
-    data = [["Producto", "Cant", "Precio", "Subtotal"]]
-    for item in items:
-        data.append([item["nombre"][:23], str(item["cantidad"]), f"${item['precio']:.2f}", f"${item['subtotal']:.2f}"])
-    
-    table = Table(data, colWidths=[32*mm, 8*mm, 15*mm, 18*mm])
-    table.setStyle(TableStyle([
-        ('ALIGN', (0,0), (-1,0), 'CENTER'),
+    table = Table(data, colWidths=[65*mm, 40*mm, 25*mm, 20*mm, 25*mm])
+    style = TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.grey),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
         ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0,0), (-1,-1), 8.5),
-        ('GRID', (0,0), (-1,-1), 0.6, colors.black),
-        ('ALIGN', (2,1), (3,-1), 'RIGHT'),
-        ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
-    ]))
+        ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+    ])
+    
+    for i, (_, row) in enumerate(df.iterrows(), start=1):
+        if row['stock'] <= row['stock_minimo']:
+            style.add('TEXTCOLOR', (3, i), (3, i), colors.red)
+            style.add('FONTNAME', (3, i), (3, i), 'Helvetica-Bold')
+
+    table.setStyle(style)
+    elements.append(table)
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+# --- GENERACIÓN DE PDF: TICKET ---
+def export_ticket_pdf(items, total, pago=None, vuelto=None, medio_pago="Efectivo", ticket_num=None, fecha=None, cajero=None):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=(80*mm, 297*mm), rightMargin=4*mm, leftMargin=4*mm, topMargin=5*mm, bottomMargin=5*mm)
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    title_style = ParagraphStyle('T', fontSize=13, alignment=1, spaceAfter=6)
+    header_style = ParagraphStyle('H', fontSize=8.5, alignment=1)
+    
+    elements.append(Paragraph("<b>MI NEGOCIO</b>", title_style))
+    elements.append(Paragraph(f"Ticket #{ticket_num:05d}", header_style))
+    elements.append(Paragraph(f"Fecha: {fecha if fecha else datetime.now().strftime('%d/%m/%Y %H:%M')}", header_style))
+    elements.append(Spacer(1, 5))
+    
+    data = [["Prod", "Cant", "Subt"]]
+    for item in items:
+        data.append([item["nombre"][:15], str(item["cantidad"]), f"${item['subtotal']:.2f}"])
+    
+    table = Table(data, colWidths=[35*mm, 12*mm, 20*mm])
+    table.setStyle(TableStyle([('FONTSIZE', (0,0), (-1,-1), 8), ('GRID', (0,0), (-1,-1), 0.5, colors.black)]))
     elements.append(table)
     
-    elements.append(Spacer(1, 10))
-    elements.append(Paragraph(f"<b>TOTAL: ${total:.2f}</b>", total_style))
-    
-    if pago is not None and vuelto is not None:
-        elements.append(Spacer(1, 5))
-        elements.append(Paragraph(f"Pagado: ${pago:.2f}", header_style))
-        elements.append(Paragraph(f"<b>Vuelto: ${vuelto:.2f}</b>", bold_style))
-    
-    elements.append(Spacer(1, 8))
-    elements.append(Paragraph(f"Medio de Pago: {medio_pago}", bold_style))
-    
-    elements.append(Spacer(1, 15))
-    elements.append(Paragraph("¡Gracias por su compra!", thanks_style))
-    elements.append(Paragraph("Vuelva pronto", header_style))
-    elements.append(Spacer(1, 6))
-    elements.append(Paragraph("─" * 30, header_style))
+    elements.append(Paragraph(f"<b>TOTAL: ${total:.2f}</b>", title_style))
+    elements.append(Paragraph(f"Pago: {medio_pago}", header_style))
     
     doc.build(elements)
     buffer.seek(0)
     return buffer.getvalue()
 
-# ===================== MENÚ =====================
+# ===================== MENÚ Y NAVEGACIÓN =====================
 if st.session_state.role == "admin":
-    opciones = ["🏠 Dashboard", "📋 Ver Stock", "➕ Agregar Producto", "✏️ Editar/Eliminar",
-                "📉 Registrar Venta", "📈 Registrar Compra", "🔄 Reimprimir Ticket", "📊 Reportes", "📜 Historial"]
+    opciones = ["🏠 Dashboard", "📋 Ver Stock", "📉 Registrar Venta", "🔄 Reimprimir Ticket", "📜 Historial"]
 else:
     opciones = ["🏠 Dashboard", "📋 Ver Stock", "📉 Registrar Venta"]
 
 menu = st.sidebar.selectbox("Menú Principal", opciones)
-st.sidebar.success(f"👤 {st.session_state.username} ({st.session_state.role})")
+st.sidebar.write(f"👤 {st.session_state.username}")
 
 # ===================== DASHBOARD =====================
 if menu == "🏠 Dashboard":
-    st.header("🏠 Dashboard - Resumen")
+    st.header("🏠 Dashboard")
     df_prod = obtener_productos()
     conn = get_connection()
     df_mov = pd.read_sql_query('SELECT * FROM movimientos ORDER BY fecha DESC', conn)
     conn.close()
-    
+
     col1, col2, col3, col4 = st.columns(4)
-    with col1: st.metric("Total Productos", len(df_prod))
-    with col2: st.metric("Valor Inventario", f"${(df_prod['stock'] * df_prod['precio']).sum():,.2f}")
+    with col1: st.metric("Productos", len(df_prod))
+    with col2: st.metric("Inventario", f"${(df_prod['stock'] * df_prod['precio']).sum():,.2f}")
     with col3:
         hoy = datetime.now().strftime("%Y-%m-%d")
         ventas_hoy = df_mov[(df_mov["tipo"] == "venta") & (df_mov["fecha"].str.startswith(hoy))]["total"].sum() if not df_mov.empty else 0
         st.metric("Ventas Hoy", f"${ventas_hoy:,.2f}")
     with col4:
-        # CORRECCIÓN AQUÍ: Asegúrate de que timedelta esté importado arriba
         hace_7 = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
         ventas_sem = df_mov[(df_mov["tipo"] == "venta") & (df_mov["fecha"] >= hace_7)]["total"].sum() if not df_mov.empty else 0
         st.metric("Ventas Semana", f"${ventas_sem:,.2f}")
+
 # ===================== VER STOCK =====================
-elif menu == "📋 Ver Stock":  # <--- Este es el que te daba error
+elif menu == "📋 Ver Stock":
     st.header("📋 Stock Actual")
     df = obtener_productos()
     
     if df.empty:
-        st.warning("No hay productos registrados aún.")
+        st.warning("No hay productos.")
     else:
-        categoria_filtro = st.selectbox("Filtrar por categoría", ["Todas"] + sorted(df["categoria"].unique().tolist()))
-        df_filtrado = df[df["categoria"] == categoria_filtro] if categoria_filtro != "Todas" else df.copy()
+        categoria = st.selectbox("Categoría", ["Todas"] + sorted(df["categoria"].unique().tolist()))
+        df_f = df[df["categoria"] == categoria] if categoria != "Todas" else df
+        st.dataframe(df_f, use_container_width=True)
         
-        st.dataframe(df_filtrado[["nombre", "categoria", "precio", "stock", "stock_minimo"]], use_container_width=True)
-        
-        bajos = df_filtrado[df_filtrado["stock"] <= df_filtrado["stock_minimo"]]
-        if not bajos.empty:
-            st.error(f"⚠️ {len(bajos)} producto(s) con stock bajo:")
-            st.dataframe(bajos[["nombre", "stock", "stock_minimo"]])
-        
-        st.subheader("📤 Exportar Stock")
         col1, col2 = st.columns(2)
         with col1:
             if st.button("📄 Exportar a PDF", type="primary"):
-                if not df_filtrado.empty:
-                    pdf_buffer = export_stock_to_pdf(df_filtrado)
-                    st.download_button(
-                        label="Descargar PDF de Stock",
-                        data=pdf_buffer,
-                        file_name=f"stock_{datetime.now().strftime('%Y%m%d')}.pdf",
-                        mime="application/pdf"
-                    )
+                pdf_data = export_stock_to_pdf(df_f)
+                st.download_button("Descargar PDF", pdf_data, "stock.pdf", "application/pdf")
         with col2:
             if st.button("📊 Exportar a Excel"):
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    df_filtrado.to_excel(writer, sheet_name='Stock', index=False)
-                output.seek(0)
-                st.download_button("Descargar Excel", output, f"stock_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", 
-                                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    df_f.to_excel(writer, index=False)
+                st.download_button("Descargar Excel", output.getvalue(), "stock.xlsx")
+
 # ===================== REGISTRAR VENTA =====================
 elif menu == "📉 Registrar Venta":
-    st.header("📉 Registrar Venta")
-    
-    if "cart" not in st.session_state:
-        st.session_state.cart = []
-    if "last_ticket" not in st.session_state:
-        st.session_state.last_ticket = None
-    
+    st.header("📉 Venta Nueva")
+    if "cart" not in st.session_state: st.session_state.cart = []
+    if "last_ticket" not in st.session_state: st.session_state.last_ticket = None
+
     df = obtener_productos()
+    producto_sel = st.selectbox("Producto", df["nombre"].tolist())
+    row = df[df["nombre"] == producto_sel].iloc[0]
     
-    if df.empty:
-        st.warning("Primero agrega productos")
-    else:
-        buscar = st.text_input("🔍 Buscar producto", key="buscar_venta")
-        opciones = df["nombre"].tolist()
-        if buscar:
-            opciones = [p for p in opciones if buscar.lower() in p.lower()]
+    col_c, col_b = st.columns([2,1])
+    with col_c:
+        cant = st.number_input("Cantidad", min_value=1, max_value=int(row['stock']), value=1)
+    with col_b:
+        if st.button("➕ Añadir"):
+            st.session_state.cart.append({"id": int(row["id"]), "nombre": row["nombre"], "cantidad": cant, "precio": row["precio"], "subtotal": cant * row["precio"]})
+            st.rerun()
+
+    if st.session_state.cart:
+        total = sum(i["subtotal"] for i in st.session_state.cart)
+        st.write(st.session_state.cart)
+        st.metric("TOTAL", f"${total:.2f}")
         
-        if opciones:
-            producto_sel = st.selectbox("Seleccionar Producto", opciones, key="sel_producto")
-            row = df[df["nombre"] == producto_sel].iloc[0]
-            stock_actual = int(row['stock'])
-            
-            st.info(f"**Stock actual:** {stock_actual} | Precio: **${row['precio']:.2f}**")
-            
-            if stock_actual > 0:
-                col1, col2 = st.columns([3,1])
-                with col1:
-                    cantidad = st.number_input("Cantidad", min_value=1, max_value=stock_actual, value=1, key="cant_venta")
-                with col2:
-                    if st.button("➕ Agregar al carrito"):
-                        st.session_state.cart.append({
-                            "id": int(row["id"]), "nombre": row["nombre"], "cantidad": cantidad,
-                            "precio": float(row["precio"]), "subtotal": cantidad * float(row["precio"])
-                        })
-                        st.success(f"✅ {row['nombre']} agregado")
-                        st.rerun()
-            else:
-                st.error("❌ Sin stock disponible")
-        
-        st.subheader("🛒 Carrito")
-        if st.session_state.cart:
-            for i, item in enumerate(st.session_state.cart):
-                col_a, col_b = st.columns([5,1])
-                with col_a:
-                    st.write(f"• **{item['nombre']}** ×{item['cantidad']} → **${item['subtotal']:.2f}**")
-                with col_b:
-                    if st.button("🗑️", key=f"del_{i}"):
-                        del st.session_state.cart[i]
-                        st.rerun()
-            
-            total = sum(item["subtotal"] for item in st.session_state.cart)
-            st.divider()
-            st.metric("TOTAL A PAGAR", f"${total:,.2f}")
-            
-            medio_pago = st.selectbox("💳 Medio de Pago", ["Efectivo", "Transferencia", "Tarjeta Débito", "Tarjeta Crédito", "Otro"])
-            
-            pago = st.number_input("💵 Monto recibido", min_value=total, value=total, format="%.2f")
-            vuelto = pago - total
-            
-            if st.button("✅ Finalizar Venta y Generar Ticket", type="primary"):
-                todo_ok = True
-                for item in st.session_state.cart:
-                    exito, msg = registrar_movimiento("venta", item["id"], item["cantidad"], item["precio"])
-                    if not exito:
-                        st.error(msg)
-                        todo_ok = False
-                        break
-                
-                if todo_ok:
-                    ticket_num = get_next_ticket_number()
-                    pdf_bytes = export_ticket_pdf(st.session_state.cart, total, pago, vuelto, medio_pago, ticket_num)
-                    guardar_venta(ticket_num, st.session_state.cart, total, medio_pago)
-                    
-                    st.session_state.last_ticket = {"pdf": pdf_bytes, "filename": f"ticket_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"}
-                    st.session_state.cart = []
-                    st.success("✅ Venta registrada")
-                    st.rerun()
-        
-        else:
-            st.info("Agregá productos al carrito")
-        
-        if st.session_state.last_ticket is not None:
-            st.subheader("🧾 Ticket generado")
-            st.download_button("📄 Descargar Ticket PDF", 
-                             data=st.session_state.last_ticket["pdf"],
-                             file_name=st.session_state.last_ticket["filename"],
-                             mime="application/pdf", type="primary")
-            if st.button("Nueva venta"):
-                st.session_state.last_ticket = None
-                st.rerun()
+        medio = st.selectbox("Pago", ["Efectivo", "Transferencia"])
+        if st.button("Finalizar Venta"):
+            tk = get_next_ticket_number()
+            for i in st.session_state.cart:
+                registrar_movimiento("venta", i["id"], i["cantidad"], i["precio"])
+            guardar_venta(tk, st.session_state.cart, total, medio)
+            st.session_state.last_ticket = export_ticket_pdf(st.session_state.cart, total, ticket_num=tk, medio_pago=medio)
+            st.session_state.cart = []
+            st.rerun()
+    
+    if st.session_state.last_ticket:
+        st.download_button("Descargar Ticket", st.session_state.last_ticket, "ticket.pdf", "application/pdf")
 
 # ===================== REIMPRIMIR TICKET =====================
 elif menu == "🔄 Reimprimir Ticket":
-    st.header("🔄 Reimprimir Ticket Anterior")
-    
+    st.header("🔄 Reimpresión")
     conn = get_connection()
-    df_ventas = pd.read_sql_query("""
-        SELECT ticket_num, fecha, cajero, total, medio_pago 
-        FROM ventas 
-        ORDER BY fecha DESC
-        LIMIT 25
-    """, conn)
+    df_v = pd.read_sql_query("SELECT ticket_num, fecha, total FROM ventas ORDER BY id DESC LIMIT 10", conn)
     conn.close()
     
-    if df_ventas.empty:
-        st.info("Aún no hay tickets para reimprimir.")
-    else:
-        opciones = [f"Ticket #{row['ticket_num']:05d} — {row['fecha']} — ${row['total']:.2f}" for _, row in df_ventas.iterrows()]
-        seleccion = st.selectbox("Seleccionar ticket", opciones)
-        
-        if st.button("🖨️ Descargar Ticket para Imprimir", type="primary"):
-            idx = opciones.index(seleccion)
-            ticket_num = df_ventas.iloc[idx]['ticket_num']
-            venta = obtener_venta_para_reimpresion(ticket_num)
-            
-            if venta:
-                pdf_bytes = export_ticket_pdf(
-                    items=venta['items'],
-                    total=venta['total'],
-                    medio_pago=venta['medio_pago'],
-                    ticket_num=venta['ticket_num'],
-                    fecha=venta['fecha'],
-                    cajero=venta['cajero']
-                )
-                st.success(f"Ticket #{venta['ticket_num']:05d} listo")
-                st.download_button(
-                    label="📄 Descargar PDF para Imprimir",
-                    data=pdf_bytes,
-                    file_name=f"ticket_{venta['ticket_num']:05d}.pdf",
-                    mime="application/pdf",
-                    type="primary"
-                )
-            else:
-                st.error("No se pudo recuperar el ticket.")
+    if not df_v.empty:
+        sel = st.selectbox("Ticket", df_v["ticket_num"].tolist())
+        if st.button("Generar PDF"):
+            v = obtener_venta_para_reimpresion(sel)
+            pdf = export_ticket_pdf(v['items'], v['total'], ticket_num=v['ticket_num'], medio_pago=v['medio_pago'], fecha=v['fecha'], cajero=v['cajero'])
+            st.download_button("Descargar", pdf, f"ticket_{sel}.pdf", "application/pdf")
 
 # ===================== CERRAR SESIÓN =====================
 if st.sidebar.button("Cerrar Sesión"):
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
+    st.session_state.clear()
     st.rerun()
-
-st.sidebar.caption("✅ Ticket optimizado para Xprinter + Reimpresión")
