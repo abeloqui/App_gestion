@@ -321,7 +321,7 @@ def export_stock_to_pdf(df):
     buffer.seek(0)
     return buffer
 # ===================== VER STOCK =====================
-elif menu == ("📋 Ver Stock":)
+elif menu == ("📋 Ver Stock:")
     st.header("📋 Stock Actual")
     df = obtener_productos()
     
