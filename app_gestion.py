@@ -127,71 +127,41 @@ def obtener_productos():
     return df
 
 # ===================== TICKET DE VENTA =====================
-def export_ticket_pdf(items, total, pago=None, vuelto=None, medio_pago="Efectivo"):
-    buffer = BytesIO()
-    EMPRESA = "MI NEGOCIO"           
-    DIRECCION = "Neuquén, Argentina" 
-    TELEFONO = "299-1234567"         
+# ===================== REIMPRIMIR TICKET =====================
+elif menu == "🔄 Reimprimir Ticket":
+    st.header("🔄 Reimprimir Ticket Anterior")
     
-    doc = SimpleDocTemplate(buffer, pagesize=(80*mm, 297*mm), rightMargin=4*mm, leftMargin=4*mm, topMargin=4*mm)
-    elements = []
-    styles = getSampleStyleSheet()
+    conn = get_connection()
+    df_tickets = pd.read_sql_query("""
+        SELECT DISTINCT 
+            strftime('%d/%m/%Y %H:%M', fecha) as fecha_hora,
+            (SELECT valor FROM config WHERE clave='ultimo_ticket') as ticket_num,
+            GROUP_CONCAT(p.nombre) as productos,
+            SUM(m.total) as total_venta
+        FROM movimientos m
+        JOIN productos p ON m.producto_id = p.id
+        WHERE m.tipo = 'venta'
+        GROUP BY m.fecha
+        ORDER BY m.fecha DESC
+        LIMIT 15
+    """, conn)
+    conn.close()
     
-    title_style = ParagraphStyle('TitleStyle', parent=styles['Title'], fontSize=14, alignment=1, spaceAfter=6)
-    normal_style = ParagraphStyle('NormalStyle', parent=styles['Normal'], fontSize=9, alignment=1, spaceAfter=4)
-    bold_style = ParagraphStyle('BoldStyle', parent=styles['Normal'], fontSize=10, alignment=1, spaceAfter=6)
-    
-    now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    ticket_num = get_next_ticket_number()
-    
-    elements.append(Paragraph(f"<b>{EMPRESA}</b>", title_style))
-    elements.append(Paragraph(DIRECCION, normal_style))
-    elements.append(Paragraph(f"Tel: {TELEFONO}", normal_style))
-    elements.append(Spacer(1, 6))
-    elements.append(Paragraph(f"<b>Ticket #{ticket_num:05d}</b>", bold_style))
-    elements.append(Paragraph(f"Fecha: {now}", normal_style))
-    elements.append(Paragraph(f"Cajero: {st.session_state.username}", normal_style))
-    elements.append(Spacer(1, 8))
-    
-    elements.append(Paragraph("─" * 32, normal_style))
-    elements.append(Spacer(1, 8))
-    
-    data = [["Producto", "Cant.", "P.Unit", "Subtotal"]]
-    for item in items:
-        data.append([item["nombre"][:20], str(item["cantidad"]), f"${item['precio']:.2f}", f"${item['subtotal']:.2f}"])
-    
-    table = Table(data, colWidths=[30*mm, 9*mm, 16*mm, 18*mm])
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.black),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('FONTSIZE', (0,0), (-1,-1), 8.5),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-    ]))
-    elements.append(table)
-    
-    elements.append(Spacer(1, 12))
-    elements.append(Paragraph(f"<b>TOTAL: ${total:.2f}</b>", ParagraphStyle('TotalStyle', parent=styles['Title'], fontSize=13, alignment=1)))
-    
-    if pago is not None and vuelto is not None:
-        elements.append(Spacer(1, 6))
-        elements.append(Paragraph(f"Pagado: ${pago:.2f}", normal_style))
-        elements.append(Paragraph(f"<b>Vuelto: ${vuelto:.2f}</b>", bold_style))
-    
-    elements.append(Spacer(1, 8))
-    elements.append(Paragraph(f"<b>Medio de Pago:</b> {medio_pago}", bold_style))
-    
-    elements.append(Spacer(1, 15))
-    elements.append(Paragraph("¡Gracias por su compra!", ParagraphStyle('Thanks', parent=styles['Normal'], fontSize=10, alignment=1)))
-    elements.append(Paragraph("Esperamos verte pronto ❤️", normal_style))
-    elements.append(Spacer(1, 8))
-    elements.append(Paragraph("─" * 32, normal_style))
-    
-    doc.build(elements)
-    buffer.seek(0)
-    return buffer.getvalue()
+    if df_tickets.empty:
+        st.info("Aún no hay tickets para reimprimir.")
+    else:
+        st.write("Selecciona un ticket reciente para reimprimir:")
+        ticket_sel = st.selectbox(
+            "Ticket",
+            options=range(len(df_tickets)),
+            format_func=lambda x: f"Ticket #{df_tickets.iloc[x]['ticket_num']:05d} - {df_tickets.iloc[x]['fecha_hora']} - ${df_tickets.iloc[x]['total_venta']:.2f}"
+        )
+        
+        if st.button("🖨️ Reimprimir Ticket Seleccionado", type="primary"):
+            st.warning("Funcionalidad de reimpresión completa estará disponible pronto. Por ahora solo mostramos los tickets recientes.")
+            st.dataframe(df_tickets.iloc[[ticket_sel]])
 
-# ===================== EXPORTAR STOCK A PDF =====================
+
 # ===================== EXPORTAR STOCK A PDF (VERSIÓN MEJORADA) =====================
 def export_stock_to_pdf(df):
     buffer = BytesIO()
