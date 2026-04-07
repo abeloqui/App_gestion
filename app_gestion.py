@@ -251,7 +251,9 @@ st.sidebar.success(f"👤 {st.session_state.username} ({st.session_state.role})"
 if menu == "🏠 Dashboard":
     st.header("🏠 Dashboard - Resumen")
     df_prod = obtener_productos()
-    df_mov = pd.read_sql_query('SELECT * FROM movimientos ORDER BY fecha DESC', get_connection())
+    conn = get_connection()
+    df_mov = pd.read_sql_query('SELECT * FROM movimientos ORDER BY fecha DESC', conn)
+    conn.close()
     
     col1, col2, col3, col4 = st.columns(4)
     with col1: st.metric("Total Productos", len(df_prod))
@@ -261,67 +263,12 @@ if menu == "🏠 Dashboard":
         ventas_hoy = df_mov[(df_mov["tipo"] == "venta") & (df_mov["fecha"].str.startswith(hoy))]["total"].sum() if not df_mov.empty else 0
         st.metric("Ventas Hoy", f"${ventas_hoy:,.2f}")
     with col4:
+        # CORRECCIÓN AQUÍ: Asegúrate de que timedelta esté importado arriba
         hace_7 = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
         ventas_sem = df_mov[(df_mov["tipo"] == "venta") & (df_mov["fecha"] >= hace_7)]["total"].sum() if not df_mov.empty else 0
         st.metric("Ventas Semana", f"${ventas_sem:,.2f}")
-def export_stock_to_pdf(df):
-    buffer = BytesIO()
-    # Usamos A4 para el reporte de stock
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
-    elements = []
-    styles = getSampleStyleSheet()
-    
-    # Estilos
-    title_style = ParagraphStyle('Title', parent=styles['Title'], fontSize=18, alignment=1, spaceAfter=10)
-    fecha_style = ParagraphStyle('Normal', parent=styles['Normal'], fontSize=10, alignment=2, spaceAfter=20)
-    
-    # Encabezado
-    elements.append(Paragraph("Reporte de Stock Actual", title_style))
-    elements.append(Paragraph(f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", fecha_style))
-    
-    # Preparar datos de la tabla
-    # Convertimos el DataFrame a una lista de listas
-    data = [["Nombre del Producto", "Categoría", "Precio", "Stock", "Mínimo"]]
-    for _, row in df.iterrows():
-        data.append([
-            row['nombre'], 
-            row['categoria'], 
-            f"${row['precio']:.2f}", 
-            str(row['stock']), 
-            str(row['stock_minimo'])
-        ])
-    
-    # Crear Tabla
-    # Definimos anchos de columna proporcionales para A4 (aprox 170mm útiles)
-    table = Table(data, colWidths=[60*mm, 40*mm, 25*mm, 20*mm, 25*mm])
-    
-    style = TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ('FONTSIZE', (0, 1), (-1, -1), 10),
-        ('ALIGN', (0, 1), (0, -1), 'LEFT'), # Alinea nombres a la izquierda
-    ])
-    
-    # Resaltar en rojo los productos con stock bajo
-    for i, (_, row) in enumerate(df.iterrows(), start=1):
-        if row['stock'] <= row['stock_minimo']:
-            style.add('TEXTCOLOR', (3, i), (3, i), colors.red)
-            style.add('FONTNAME', (3, i), (3, i), 'Helvetica-Bold')
-
-    table.setStyle(style)
-    elements.append(table)
-    
-    doc.build(elements)
-    buffer.seek(0)
-    return buffer
 # ===================== VER STOCK =====================
-elif menu == ("📋 Ver Stock:")
+elif menu == "📋 Ver Stock":  # <--- Este es el que te daba error
     st.header("📋 Stock Actual")
     df = obtener_productos()
     
@@ -342,8 +289,14 @@ elif menu == ("📋 Ver Stock:")
         col1, col2 = st.columns(2)
         with col1:
             if st.button("📄 Exportar a PDF", type="primary"):
-                # Aquí iría la función export_stock_to_pdf si la tienes
-                st.info("Exportación a PDF de stock pendiente de implementar")
+                if not df_filtrado.empty:
+                    pdf_buffer = export_stock_to_pdf(df_filtrado)
+                    st.download_button(
+                        label="Descargar PDF de Stock",
+                        data=pdf_buffer,
+                        file_name=f"stock_{datetime.now().strftime('%Y%m%d')}.pdf",
+                        mime="application/pdf"
+                    )
         with col2:
             if st.button("📊 Exportar a Excel"):
                 output = BytesIO()
@@ -352,7 +305,6 @@ elif menu == ("📋 Ver Stock:")
                 output.seek(0)
                 st.download_button("Descargar Excel", output, f"stock_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", 
                                  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
 # ===================== REGISTRAR VENTA =====================
 elif menu == "📉 Registrar Venta":
     st.header("📉 Registrar Venta")
