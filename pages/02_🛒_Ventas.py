@@ -57,7 +57,56 @@ def generar_ticket_pdf(items, total, n_ticket):
     elements.append(Paragraph(f"<b>TOTAL A PAGAR: ${total:.2f}</b>", estilo_titulo))
     elements.append(Spacer(1, 3))
     elements.append(Paragraph("¡Gracias por su preferencia!", estilo_texto))
+    # ... (Código anterior igual hasta llegar a la sección del total)
+
+if st.session_state.cart:
+    total_final = sum(item["subtotal"] for item in st.session_state.cart)
+    st.metric("TOTAL VENTA", f"${total_final:,.2f}")
+
+    # --- NUEVO: Selección de Medio de Pago ---
+    medio_pago = st.selectbox("💳 Medio de Pago", ["Efectivo", "Tarjeta de Débito", "Tarjeta de Crédito", "Transferencia", "QR / Billetera Virtual"])
     
+    col_v1, col_v2 = st.columns(2)
+    with col_v1:
+        if st.button("🗑️ Vaciar Carrito", use_container_width=True):
+            st.session_state.cart = []
+            st.rerun()
+            
+    with col_v2:
+        if st.button("✅ Confirmar Venta", type="primary", use_container_width=True):
+            conn = get_connection()
+            cur = conn.cursor()
+            try:
+                for item in st.session_state.cart:
+                    c_id = int(item["id"])
+                    c_cant = int(item["cantidad"])
+                    c_pre = float(item["precio"])
+                    c_sub = float(item["subtotal"])
+
+                    cur.execute("UPDATE productos SET stock = stock - %s WHERE id = %s", (c_cant, c_id))
+                    cur.execute("""
+                        INSERT INTO movimientos (tipo, producto_id, cantidad, precio_unitario, total) 
+                        VALUES ('venta', %s, %s, %s, %s)
+                    """, (c_id, c_cant, c_pre, c_sub))
+                
+                # --- ACTUALIZADO: Guardamos el medio de pago en la BD ---
+                cur.execute("""
+                    INSERT INTO ventas (cajero, total, medio_pago, items) 
+                    VALUES (%s, %s, %s, %s) RETURNING ticket_num
+                """, (st.session_state.username, float(total_final), medio_pago, str(st.session_state.cart)))
+                
+                n_ticket_generado = cur.fetchone()[0]
+                conn.commit()
+                
+                st.session_state.last_ticket_bin = generar_ticket_pdf(st.session_state.cart, total_final, n_ticket_generado)
+                st.session_state.cart = [] 
+                st.success(f"Venta registrada ({medio_pago}). Ticket N° {n_ticket_generado}")
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"Error: {e}")
+            finally:
+                conn.close()
     doc.build(elements)
     return buffer.getvalue()
 
