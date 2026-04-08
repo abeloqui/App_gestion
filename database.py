@@ -25,7 +25,7 @@ def get_connection():
     engine = get_engine()
     return engine.raw_connection()
 
-
+ALTER TABLE recetas ADD COLUMN IF NOT EXISTS unidad TEXT DEFAULT 'kg';
 # --- INICIALIZACIÓN DE TABLAS ---
 def init_db():
     """
