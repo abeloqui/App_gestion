@@ -1,171 +1,103 @@
+import psycopg2
 import streamlit as st
-from database import init_db, get_engine
-import pandas as pd
-import plotly.express as px
+import os
+from sqlalchemy import create_engine
 
-# Configuración inicial
-st.set_page_config(page_title="Pastelería Gestión Pro", layout="wide", page_icon="🎂")
+# --- CONFIGURACIÓN DE CONEXIÓN ---
 
-# Inicializar Base de Datos
-try:
-    init_db()
-except Exception as e:
-    st.error(f"Error de base de datos: {e}")
-
-# --- LOGIN ---
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-
-if not st.session_state.logged_in:
-    st.title("🔐 Acceso al Sistema - Pastelería Dulce Jazmín")
-    with st.form("login_form"):
-        user = st.text_input("Usuario")
-        pw = st.text_input("Contraseña", type="password")
-        if st.form_submit_button("Ingresar", use_container_width=True):
-            if user == "admin" and pw == "1234":
-                st.session_state.logged_in = True
-                st.session_state.username = user
-                st.rerun()
-            else:
-                st.error("Credenciales incorrectas")
-    st.stop()
-
-# --- DASHBOARD PRINCIPAL ---
-st.title(f"📊 Panel de Control - {st.session_state.username}")
-engine = get_engine()
-hoy = pd.Timestamp.now().date()
-
-st.subheader("📈 Resumen General del Día")
-
-# --- MÉTRICAS SUPERIORES ---
-c1, c2, c3, c4, c5 = st.columns(5)
-
-try:
-    # Ventas del día
-    df_v = pd.read_sql(f"SELECT total, medio_pago FROM ventas WHERE fecha >= '{hoy}'", engine)
-    ventas_hoy = df_v['total'].sum() if not df_v.empty else 0
-    tickets_hoy = len(df_v)
-
-    # Alertas de stock total
-    df_crit = pd.read_sql("SELECT nombre, stock, subcategoria FROM productos WHERE stock <= stock_minimo", engine)
-    alertas_total = len(df_crit)
-
-    # Producción del día
-    df_prod_hoy = pd.read_sql(
-        f"SELECT SUM(cantidad) as total FROM movimientos WHERE tipo='produccion' AND fecha >= '{hoy}'", 
-        engine
-    )
-    cant_prod = df_prod_hoy['total'].iloc[0] if not df_prod_hoy.empty and df_prod_hoy['total'].iloc[0] is not None else 0
-
-    # Stock por subcategoría
-    df_stock_tipo = pd.read_sql("""
-        SELECT subcategoria, SUM(stock) as stock_total, COUNT(*) as cantidad_productos 
-        FROM productos 
-        GROUP BY subcategoria
-    """, engine)
-
-    c1.metric("💰 Ventas Hoy", f"${ventas_hoy:,.2f}")
-    c2.metric("🎟️ Tickets Hoy", tickets_hoy)
-    c3.metric("⚠️ Alertas de Stock", alertas_total, delta=alertas_total, delta_color="inverse")
-    c4.metric("👩‍🍳 Producido Hoy", f"{cant_prod:.1f}")
+@st.cache_resource
+def get_engine():
+    """Crea y cachea el engine de SQLAlchemy"""
+    db_url = st.secrets.get("DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if not db_url:
+        st.error("❌ DATABASE_URL no configurado en Secrets o Variables de Entorno.")
+        st.stop()
     
-    # Mostramos stock total de Producto Final como métrica principal
-    stock_final = df_stock_tipo[df_stock_tipo['subcategoria'] == 'Producto Final']['stock_total'].sum() if not df_stock_tipo.empty else 0
-    c5.metric("🏷️ Stock Producto Final", f"{stock_final:.1f} u/kg")
+    # Ajuste para compatibilidad con Render / Railway / etc.
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    
+    return create_engine(db_url, pool_pre_ping=True)
 
-    st.divider()
 
-    # --- STOCK FRACCIONADO ---
-    st.subheader("📦 Stock Actual por Tipo")
-    if not df_stock_tipo.empty:
-        col_mp, col_pre, col_final = st.columns(3)
-        
-        with col_mp:
-            mp = df_stock_tipo[df_stock_tipo['subcategoria'] == 'Materia Prima']
-            st.metric("📦 Materia Prima", 
-                     f"{mp['stock_total'].sum() if not mp.empty else 0:.1f} u/kg",
-                     f"{mp['cantidad_productos'].sum() if not mp.empty else 0} productos")
-        
-        with col_pre:
-            pre = df_stock_tipo[df_stock_tipo['subcategoria'] == 'Preelaborado']
-            st.metric("🔧 Preelaborado", 
-                     f"{pre['stock_total'].sum() if not pre.empty else 0:.1f} u/kg",
-                     f"{pre['cantidad_productos'].sum() if not pre.empty else 0} productos")
-        
-        with col_final:
-            final = df_stock_tipo[df_stock_tipo['subcategoria'] == 'Producto Final']
-            st.metric("🏷️ Producto Final", 
-                     f"{final['stock_total'].sum() if not final.empty else 0:.1f} u/kg",
-                     f"{final['cantidad_productos'].sum() if not final.empty else 0} productos")
-    else:
-        st.info("No hay productos cargados aún.")
+def get_connection():
+    """Retorna una conexión cruda (psycopg2)"""
+    engine = get_engine()
+    return engine.raw_connection()
 
-    st.divider()
 
-    # --- GRÁFICOS ---
-    col_g1, col_g2 = st.columns(2)
+# --- INICIALIZACIÓN DE TABLAS ---
+def init_db():
+    """
+    Crea las tablas si no existen y realiza migraciones automáticas.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # 1. Tabla de Productos
+        cur.execute('''CREATE TABLE IF NOT EXISTS productos (
+            id SERIAL PRIMARY KEY, 
+            nombre TEXT UNIQUE NOT NULL, 
+            categoria TEXT DEFAULT 'General',
+            subcategoria TEXT DEFAULT 'Materia Prima',
+            precio_venta REAL DEFAULT 0, 
+            precio_costo REAL DEFAULT 0,
+            stock REAL NOT NULL DEFAULT 0, 
+            stock_minimo REAL DEFAULT 5,
+            es_producido BOOLEAN DEFAULT FALSE
+        )''')
 
-    with col_g1:
-        st.subheader("💰 Ventas por Medio de Pago (Hoy)")
-        if not df_v.empty:
-            fig_pago = px.pie(df_v, values='total', names='medio_pago', 
-                             hole=0.4, color_discrete_sequence=px.colors.qualitative.Safe)
-            st.plotly_chart(fig_pago, use_container_width=True)
-        else:
-            st.info("Sin ventas registradas hoy")
+        # 2. Tabla de Movimientos
+        cur.execute('''CREATE TABLE IF NOT EXISTS movimientos (
+            id SERIAL PRIMARY KEY, 
+            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            tipo TEXT, 
+            producto_id INTEGER REFERENCES productos(id),
+            cantidad REAL, 
+            precio_unitario REAL DEFAULT 0, 
+            total REAL DEFAULT 0,
+            detalle TEXT
+        )''')
 
-    with col_g2:
-        st.subheader("🔥 Top 5 Productos Finales Más Vendidos")
-        query_top = """
-            SELECT p.nombre, SUM(m.cantidad) as total 
-            FROM movimientos m 
-            JOIN productos p ON m.producto_id = p.id 
-            WHERE m.tipo='venta' 
-              AND p.subcategoria = 'Producto Final'
-            GROUP BY p.nombre 
-            ORDER BY total DESC LIMIT 5
-        """
-        df_top = pd.read_sql(query_top, engine)
-        if not df_top.empty:
-            fig_top = px.bar(df_top, x='total', y='nombre', orientation='h', 
-                           color='total', color_continuous_scale='Viridis')
-            st.plotly_chart(fig_top, use_container_width=True)
-        else:
-            st.info("Aún no hay ventas de productos finales")
+        # 3. Tabla de Ventas
+        cur.execute('''CREATE TABLE IF NOT EXISTS ventas (
+            id SERIAL PRIMARY KEY, 
+            ticket_num SERIAL,
+            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            cajero TEXT, 
+            total REAL, 
+            medio_pago TEXT DEFAULT 'Efectivo', 
+            items TEXT
+        )''')
 
-    # --- ALERTAS Y PRODUCCIÓN ---
-    st.divider()
-    col_p1, col_p2 = st.columns([2, 1])
+        # 4. Tabla de Recetas
+        cur.execute('''CREATE TABLE IF NOT EXISTS recetas (
+            id SERIAL PRIMARY KEY, 
+            plato_id INTEGER REFERENCES productos(id), 
+            insumo_id INTEGER REFERENCES productos(id), 
+            cantidad REAL
+        )''')
 
-    with col_p1:
-        st.subheader("👩‍🍳 Producción de la Última Semana")
-        df_semana = pd.read_sql("""
-            SELECT p.nombre, m.cantidad, m.fecha::date as dia
-            FROM movimientos m
-            JOIN productos p ON m.producto_id = p.id
-            WHERE m.tipo='produccion'
-              AND m.fecha > CURRENT_DATE - INTERVAL '7 days'
-            ORDER BY m.fecha
-        """, engine)
-        
-        if not df_semana.empty:
-            fig_prod = px.area(df_semana, x="dia", y="cantidad", color="nombre", 
-                             title="Volumen de Elaboración por Producto")
-            st.plotly_chart(fig_prod, use_container_width=True)
-        else:
-            st.info("No hay registros de producción en la última semana.")
+        # --- Migraciones automáticas (agregar columnas si no existen) ---
+        migrations = [
+            "ALTER TABLE ventas ADD COLUMN IF NOT EXISTS medio_pago TEXT DEFAULT 'Efectivo';",
+            "ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS detalle TEXT;",
+            "ALTER TABLE productos ADD COLUMN IF NOT EXISTS es_producido BOOLEAN DEFAULT FALSE;",
+            "ALTER TABLE productos ADD COLUMN IF NOT EXISTS subcategoria TEXT DEFAULT 'Materia Prima';"
+        ]
 
-    with col_p2:
-        st.subheader("⚠️ Productos Bajo Mínimo")
-        if not df_crit.empty:
-            # Mostramos agrupado por subcategoría
-            for subtipo in ['Materia Prima', 'Preelaborado', 'Producto Final']:
-                df_sub = df_crit[df_crit['subcategoria'] == subtipo]
-                if not df_sub.empty:
-                    st.write(f"**{subtipo}**")
-                    st.dataframe(df_sub[['nombre', 'stock']], hide_index=True, use_container_width=True)
-        else:
-            st.success("✅ No hay alertas de stock crítico en este momento.")
+        for mig in migrations:
+            try:
+                cur.execute(mig)
+            except:
+                pass  # Si ya existe, ignorar el error
 
-except Exception as e:
-    st.error(f"Error al cargar el dashboard: {e}")
+        conn.commit()
+        # st.success("Base de datos inicializada correctamente")  # descomentar solo para debug
+
+    except Exception as e:
+        conn.rollback()
+        st.error(f"Error al inicializar la base de datos: {e}")
+    finally:
+        cur.close()
+        conn.close()
