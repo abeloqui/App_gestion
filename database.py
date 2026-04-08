@@ -13,23 +13,23 @@ def get_engine():
         st.error("❌ DATABASE_URL no configurado en Secrets o Variables de Entorno.")
         st.stop()
     
-    # Ajuste para compatibilidad con Render / Railway / etc.
+    # Corrección para compatibilidad con Render, Railway, etc.
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
     
-    return create_engine(db_url, pool_pre_ping=True)
+    return create_engine(db_url, pool_pre_ping=True, echo=False)
 
 
 def get_connection():
-    """Retorna una conexión cruda (psycopg2)"""
+    """Retorna una conexión cruda psycopg2"""
     engine = get_engine()
     return engine.raw_connection()
 
-ALTER TABLE recetas ADD COLUMN IF NOT EXISTS unidad TEXT DEFAULT 'kg';
-# --- INICIALIZACIÓN DE TABLAS ---
+
+# --- INICIALIZACIÓN DE TABLAS Y MIGRACIONES ---
 def init_db():
     """
-    Crea las tablas si no existen y realiza migraciones automáticas.
+    Crea las tablas si no existen y aplica migraciones automáticas.
     """
     conn = get_connection()
     cur = conn.cursor()
@@ -70,30 +70,46 @@ def init_db():
             items TEXT
         )''')
 
-        # 4. Tabla de Recetas
+        # 4. Tabla de Recetas (¡Versión actualizada!)
         cur.execute('''CREATE TABLE IF NOT EXISTS recetas (
             id SERIAL PRIMARY KEY, 
             plato_id INTEGER REFERENCES productos(id), 
-            insumo_id INTEGER REFERENCES productos(id), 
-            cantidad REAL
+            insumo_id INTEGER REFERENCES productos(id),
+            cantidad REAL,
+            unidad TEXT DEFAULT 'kg',           -- Nueva columna: unidad de medida
+            notas TEXT                          -- Para instrucciones y notas
         )''')
 
-        # --- Migraciones automáticas (agregar columnas si no existen) ---
+        # --- MIGRACIONES AUTOMÁTICAS (se ejecutan solo si es necesario) ---
+
         migrations = [
+            # Agregar columna unidad si no existe
+            "ALTER TABLE recetas ADD COLUMN IF NOT EXISTS unidad TEXT DEFAULT 'kg';",
+            
+            # Agregar columna notas si no existe
+            "ALTER TABLE recetas ADD COLUMN IF NOT EXISTS notas TEXT;",
+            
+            # Agregar medio_pago a ventas (por si no existe)
             "ALTER TABLE ventas ADD COLUMN IF NOT EXISTS medio_pago TEXT DEFAULT 'Efectivo';",
+            
+            # Agregar detalle a movimientos
             "ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS detalle TEXT;",
+            
+            # Agregar es_producido a productos
             "ALTER TABLE productos ADD COLUMN IF NOT EXISTS es_producido BOOLEAN DEFAULT FALSE;",
-            "ALTER TABLE productos ADD COLUMN IF NOT EXISTS subcategoria TEXT DEFAULT 'Materia Prima';"
+            
+            # Asegurar subcategoria por defecto
+            "ALTER TABLE productos ALTER COLUMN subcategoria SET DEFAULT 'Materia Prima';"
         ]
 
-        for mig in migrations:
+        for migration in migrations:
             try:
-                cur.execute(mig)
+                cur.execute(migration)
             except:
-                pass  # Si ya existe, ignorar el error
+                pass  # Si ya existe, ignoramos el error
 
         conn.commit()
-        # st.success("Base de datos inicializada correctamente")  # descomentar solo para debug
+        # st.success("Base de datos inicializada correctamente")  # Descomentar solo para debug
 
     except Exception as e:
         conn.rollback()
@@ -101,3 +117,8 @@ def init_db():
     finally:
         cur.close()
         conn.close()
+
+
+# Llamada automática al iniciar
+if __name__ == "__main__":
+    init_db()
