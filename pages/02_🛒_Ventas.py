@@ -59,7 +59,14 @@ def generar_ticket_pdf(items, total, n_ticket, medio_pago):
 
 # --- INTERFAZ: SELECCIÓN DE PRODUCTOS ---
 conn = get_connection()
-df_p = pd.read_sql_query("SELECT id, nombre, precio_venta, stock FROM productos WHERE stock > 0 ORDER BY nombre", conn)
+# Importa get_engine desde tu database.py
+from database import get_engine
+
+# ... dentro de tu página ...
+
+engine = get_engine()
+# Usamos el engine en lugar de la conexión directa
+df_p = pd.read_sql_query("SELECT id, nombre, precio_venta, stock FROM productos WHERE stock > 0 ORDER BY nombre", engine)
 conn.close()
 
 with st.expander("➕ Añadir Productos", expanded=True):
