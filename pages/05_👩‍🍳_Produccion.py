@@ -4,17 +4,16 @@ from database import get_connection, get_engine
 
 st.set_page_config(page_title="Registro de Producción", layout="centered")
 
-# Validación de sesión
 if "logged_in" not in st.session_state or not st.session_state.logged_in:
     st.warning("⚠️ Inicia sesión en la página principal.")
     st.stop()
 
 st.header("👩‍🍳 Registro de Producción")
+st.write("Al registrar, se sumará el stock al producto y se descontará automáticamente de la materia prima según la receta.")
 
-# --- Obtener datos ---
 engine = get_engine()
 
-# Solo mostramos productos que se pueden fabricar (Preelaborado y Producto Final)
+# Obtener productos que se pueden producir
 df_p = pd.read_sql("""
     SELECT id, nombre 
     FROM productos 
@@ -22,62 +21,66 @@ df_p = pd.read_sql("""
     ORDER BY nombre
 """, engine)
 
-with st.form("form_p", clear_on_submit=True):
+with st.form("form_produccion", clear_on_submit=True):
     if df_p.empty:
-        st.warning("No hay productos configurados como Preelaborado o Producto Final aún.")
+        st.warning("No hay productos configurados para producir.")
         producto = None
     else:
         producto = st.selectbox("¿Qué elaboraste hoy?", df_p['nombre'].tolist())
     
-    cantidad = st.number_input("Cantidad producida (unidades/kg)", min_value=0.1, step=0.1)
+    cantidad_producida = st.number_input("Cantidad producida (unidades/kg)", min_value=0.1, step=0.1)
     
-    if st.form_submit_button("Registrar y Descontar Insumos", use_container_width=True):
+    if st.form_submit_button("🚀 Registrar Producción y Descontar Stock", use_container_width=True):
         if not producto:
-            st.error("No hay productos disponibles para producir.")
+            st.error("Selecciona un producto válido.")
         else:
-            id_prod = int(df_p[df_p['nombre'] == producto]['id'].values[0])
+            id_prod_final = int(df_p[df_p['nombre'] == producto]['id'].values[0])
             
             conn = get_connection()
             cur = conn.cursor()
             try:
                 # 1. Buscar la receta del producto
-                cur.execute("SELECT insumo_id, cantidad FROM recetas WHERE plato_id = %s", (id_prod,))
+                cur.execute("""
+                    SELECT insumo_id, cantidad 
+                    FROM recetas 
+                    WHERE plato_id = %s
+                """, (id_prod_final,))
                 receta = cur.fetchall()
-                
+
                 if not receta:
-                    st.warning(f"⚠️ El producto '{producto}' no tiene una receta definida todavía.")
-                    # Aun así podemos registrar la producción (solo suma stock)
-                    cur.execute("UPDATE productos SET stock = stock + %s WHERE id = %s", 
-                               (cantidad, id_prod))
+                    st.error(f"❌ El producto '{producto}' no tiene una receta configurada. Ve a 'Recetas' primero.")
                 else:
-                    # 2. Descontar Insumos según la receta
-                    for ins_id, cant_u in receta:
+                    # 2. Descontar cada insumo de la tabla productos
+                    for insumo_id, cant_unitaria in receta:
+                        descuento_total = cant_unitaria * cantidad_producida
                         cur.execute("""
                             UPDATE productos 
                             SET stock = stock - %s 
-                            WHERE id = %s AND stock >= %s
-                        """, (cant_u * cantidad, ins_id, cant_u * cantidad))
+                            WHERE id = %s
+                        """, (descuento_total, insumo_id))
                     
-                    # 3. Sumar el producto terminado
-                    cur.execute("UPDATE productos SET stock = stock + %s WHERE id = %s", 
-                               (cantidad, id_prod))
-                
-                # 4. Registrar el movimiento de producción
-                cur.execute("""
-                    INSERT INTO movimientos (tipo, producto_id, cantidad, total) 
-                    VALUES ('produccion', %s, %s, 0)
-                """, (id_prod, cantidad))
-                
-                conn.commit()
-                st.success(f"✅ ¡Listo! Se registraron {cantidad} de **{producto}**.")
-                st.balloons()
-                
+                    # 3. Sumar el stock al producto terminado
+                    cur.execute("""
+                        UPDATE productos 
+                        SET stock = stock + %s 
+                        WHERE id = %s
+                    """, (cantidad_producida, id_prod_final))
+                    
+                    # 4. Registrar movimiento en el historial
+                    cur.execute("""
+                        INSERT INTO movimientos (tipo, producto_id, cantidad, fecha) 
+                        VALUES ('produccion', %s, %s, NOW())
+                    """, (id_prod_final, cantidad_producida))
+                    
+                    conn.commit()
+                    st.success(f"✅ ¡Producción registrada! Se descontaron los insumos de {producto}.")
+                    st.balloons()
+            
             except Exception as e:
                 conn.rollback()
-                st.error(f"❌ Error al registrar producción: {e}")
+                st.error(f"❌ Error en la base de datos: {e}")
             finally:
                 cur.close()
                 conn.close()
 
-# Información adicional
-st.info("💡 **Tip**: Primero debes crear las recetas en la página de Recetas para que se descuenten automáticamente los insumos.")
+st.info("💡 **Recordatorio**: Si un ingrediente no se descuenta, asegúrate de que esté agregado en la receta del producto correspondiente.")
