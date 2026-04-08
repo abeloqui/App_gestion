@@ -38,78 +38,83 @@ def init_db():
         cur.execute('''CREATE TABLE IF NOT EXISTS productos (
             id SERIAL PRIMARY KEY, 
             nombre TEXT UNIQUE NOT NULL, 
-            categoria TEXT DEFAULT 'General',
+            categoria TEXT DEFAULT 'Otros',
             subcategoria TEXT DEFAULT 'Materia Prima',
-            precio_venta REAL DEFAULT 0, 
-            precio_costo REAL DEFAULT 0,
-            stock REAL NOT NULL DEFAULT 0, 
-            stock_minimo REAL DEFAULT 5,
+            precio_venta FLOAT DEFAULT 0,
+            precio_costo FLOAT DEFAULT 0,
+            stock FLOAT DEFAULT 0,
+            stock_minimo FLOAT DEFAULT 5,
             es_producido BOOLEAN DEFAULT FALSE
         )''')
 
-        # 2. Tabla de Movimientos
-        cur.execute('''CREATE TABLE IF NOT EXISTS movimientos (
+        # 2. Tabla de Ventas (Cabecera)
+        cur.execute('''CREATE TABLE IF NOT EXISTS ventas (
             id SERIAL PRIMARY KEY, 
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            tipo TEXT, 
+            total FLOAT,
+            medio_pago TEXT DEFAULT 'Efectivo'
+        )''')
+
+        # 3. Detalle de Ventas
+        cur.execute('''CREATE TABLE IF NOT EXISTS detalle_ventas (
+            id SERIAL PRIMARY KEY, 
+            venta_id INTEGER REFERENCES ventas(id),
             producto_id INTEGER REFERENCES productos(id),
-            cantidad REAL, 
-            precio_unitario REAL DEFAULT 0, 
-            total REAL DEFAULT 0,
+            cantidad FLOAT,
+            precio_unitario FLOAT,
+            subtotal FLOAT
+        )''')
+
+        # 4. Tabla de Recetas
+        cur.execute('''CREATE TABLE IF NOT EXISTS recetas (
+            id SERIAL PRIMARY KEY, 
+            plato_id INTEGER REFERENCES productos(id),
+            insumo_id INTEGER REFERENCES productos(id),
+            cantidad FLOAT NOT NULL,
+            unidad TEXT DEFAULT 'kg',
+            notas TEXT
+        )''')
+
+        # 5. Tabla de Movimientos (Historial)
+        cur.execute('''CREATE TABLE IF NOT EXISTS movimientos (
+            id SERIAL PRIMARY KEY, 
+            tipo TEXT, -- 'compra', 'venta', 'produccion', 'ajuste'
+            producto_id INTEGER REFERENCES productos(id),
+            cantidad FLOAT,
+            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             detalle TEXT
         )''')
 
-        # 3. Tabla de Ventas
-        cur.execute('''CREATE TABLE IF NOT EXISTS ventas (
-            id SERIAL PRIMARY KEY, 
-            ticket_num SERIAL,
-            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            cajero TEXT, 
-            total REAL, 
-            medio_pago TEXT DEFAULT 'Efectivo', 
-            items TEXT
-        )''')
-
-        # 4. Tabla de Recetas (¡Versión actualizada!)
-        cur.execute('''CREATE TABLE IF NOT EXISTS recetas (
-            id SERIAL PRIMARY KEY, 
-            plato_id INTEGER REFERENCES productos(id), 
-            insumo_id INTEGER REFERENCES productos(id),
-            cantidad REAL,
-            unidad TEXT DEFAULT 'kg',           -- Nueva columna: unidad de medida
-            notas TEXT                          -- Para instrucciones y notas
-        )''')
-
-        # --- MIGRACIONES AUTOMÁTICAS (se ejecutan solo si es necesario) ---
+        # --- SECCIÓN DE MIGRACIONES (MODIFICADO PARA RENDER) ---
 
         migrations = [
-            # Agregar columna unidad si no existe
+            # 1. Asegurar que existe la restricción UNIQUE para evitar el error de ON CONFLICT
+            """
+            DO $$ 
+            BEGIN 
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'unique_plato_insumo') THEN
+                    ALTER TABLE recetas ADD CONSTRAINT unique_plato_insumo UNIQUE (plato_id, insumo_id);
+                END IF;
+            END $$;
+            """,
+            
+            # 2. Otras columnas necesarias
             "ALTER TABLE recetas ADD COLUMN IF NOT EXISTS unidad TEXT DEFAULT 'kg';",
-            
-            # Agregar columna notas si no existe
             "ALTER TABLE recetas ADD COLUMN IF NOT EXISTS notas TEXT;",
-            
-            # Agregar medio_pago a ventas (por si no existe)
             "ALTER TABLE ventas ADD COLUMN IF NOT EXISTS medio_pago TEXT DEFAULT 'Efectivo';",
-            
-            # Agregar detalle a movimientos
             "ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS detalle TEXT;",
-            
-            # Agregar es_producido a productos
             "ALTER TABLE productos ADD COLUMN IF NOT EXISTS es_producido BOOLEAN DEFAULT FALSE;",
-            
-            # Asegurar subcategoria por defecto
             "ALTER TABLE productos ALTER COLUMN subcategoria SET DEFAULT 'Materia Prima';"
         ]
 
         for migration in migrations:
             try:
                 cur.execute(migration)
-            except:
-                pass  # Si ya existe, ignoramos el error
+            except Exception as e:
+                # Silenciamos errores de columnas existentes, pero podrías usar st.write(e) para debug
+                pass
 
         conn.commit()
-        # st.success("Base de datos inicializada correctamente")  # Descomentar solo para debug
 
     except Exception as e:
         conn.rollback()
