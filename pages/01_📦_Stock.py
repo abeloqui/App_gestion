@@ -1,39 +1,49 @@
 import streamlit as st
 import pandas as pd
 from database import get_connection
+from io import BytesIO
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import mm
 
-st.header("📋 Inventario Real-Time")
+# Validar sesión al principio de cada página
+if "logged_in" not in st.session_state or not st.session_state.logged_in:
+    st.warning("⚠️ Inicia sesión en la página principal.")
+    st.stop()
+
+st.header("📋 Stock Actual")
+
+def export_stock_to_pdf(df):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    elements = []
+    styles = getSampleStyleSheet()
+    elements.append(Paragraph("<b>REPORTE DE STOCK</b>", styles['Title']))
+    
+    data = [["Producto", "Categoría", "P. Venta", "Stock", "Mínimo"]]
+    for _, r in df.iterrows():
+        data.append([r['nombre'], r['categoria'], f"${r['precio_venta']:.2f}", str(r['stock']), str(r['stock_minimo'])])
+    
+    t = Table(data, colWidths=[60*mm, 40*mm, 25*mm, 20*mm, 25*mm])
+    t.setStyle(TableStyle([
+        ('BACKGROUND',(0,0),(-1,0),colors.grey),
+        ('TEXTCOLOR',(0,0),(-1,0),colors.whitesmoke),
+        ('GRID',(0,0),(-1,-1),0.5,colors.black)
+    ]))
+    elements.append(t)
+    doc.build(elements)
+    return buffer.getvalue()
 
 conn = get_connection()
-df = pd.read_sql_query("""
-    SELECT nombre, categoria, precio_costo as "Costo CMP", 
-           precio_venta as "P. Venta", stock,
-           (precio_venta - precio_costo) as "Margen Unit."
-    FROM productos
-""", conn)
+df = pd.read_sql_query("SELECT nombre, categoria, precio_venta, stock, stock_minimo FROM productos ORDER BY nombre", conn)
 conn.close()
 
-st.dataframe(df.style.highlight_between(left=0, right=5, subset=['stock'], color='#ffcccc'), 
-             use_container_width=True)
-
-# Widget para agregar productos nuevos rápido
-with st.expander("➕ Agregar Nuevo Producto"):
-    elif menu == "➕ Agregar Producto":
-    st.header("➕ Nuevo Producto")
-    with st.form("form_add"):
-        nombre = st.text_input("Nombre del producto")
-        cat = st.text_input("Categoría", value="General")
-        precio = st.number_input("Precio", min_value=0.0, step=0.1)
-        stock = st.number_input("Stock Inicial", min_value=0, step=1)
-        minimo = st.number_input("Stock Mínimo", min_value=0, value=5)
-        if st.form_submit_button("Guardar Producto"):
-            try:
-                conn = get_connection()
-                c = conn.cursor()
-                c.execute("INSERT INTO productos (nombre, categoria, precio, stock, stock_minimo) VALUES (?,?,?,?,?)",
-                          (nombre, cat, precio, stock, minimo))
-                conn.commit()
-                conn.close()
-                st.success("Producto agregado!")
-            except:
-                st.error("El nombre ya existe.")
+if df.empty:
+    st.warning("No hay productos.")
+else:
+    st.dataframe(df, use_container_width=True)
+    if st.button("📄 Exportar PDF"):
+        pdf_data = export_stock_to_pdf(df)
+        st.download_button("Descargar PDF", pdf_data, "stock.pdf", "application/pdf")
