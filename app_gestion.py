@@ -1,5 +1,5 @@
 import streamlit as st
-from database import init_db, get_engine
+from database import init_db, get_engine   # ← Esta línea ahora debería funcionar
 import pandas as pd
 import plotly.express as px
 
@@ -12,6 +12,7 @@ try:
 except Exception as e:
     st.error(f"Error de base de datos: {e}")
 
+# Resto de tu código (login + dashboard) se mantiene igual...
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
