@@ -3,7 +3,6 @@ import pandas as pd
 from io import BytesIO
 from datetime import datetime
 
-# Importamos database de forma segura
 try:
     from database import get_connection, get_engine
 except ImportError as e:
@@ -26,7 +25,7 @@ st.markdown("Unidades de medida por ingrediente + Historial de producciones")
 
 engine = get_engine()
 
-# ====================== CARGAR DATOS ======================
+# Cargar productos
 df_platos = pd.read_sql("""
     SELECT id, nombre, subcategoria, precio_costo 
     FROM productos 
@@ -50,12 +49,11 @@ with col1:
 with col2:
     rinde_por_unidad = st.number_input("Rinde (unidades por 1 kg/lote)", min_value=1, value=1, step=1)
 with col3:
-    unidad_principal = st.selectbox("Unidad principal del producto", ["kg", "unidades", "litros"], index=0)
+    unidad_principal = st.selectbox("Unidad principal", ["kg", "unidades", "litros"], index=0)
 
-# ====================== RECETA CON UNIDADES ======================
+# Cargar receta con unidades
 df_receta = pd.read_sql("""
     SELECT 
-        r.id as receta_id,
         i.nombre as insumo,
         i.precio_costo,
         r.cantidad as cantidad_base,
@@ -70,11 +68,7 @@ df_receta = pd.read_sql("""
 # Cargar notas
 conn = get_connection()
 cur = conn.cursor()
-cur.execute("""
-    SELECT notas FROM recetas 
-    WHERE plato_id = %s AND insumo_id IS NULL 
-    LIMIT 1
-""", (plato_id,))
+cur.execute("SELECT notas FROM recetas WHERE plato_id = %s AND insumo_id IS NULL LIMIT 1", (plato_id,))
 notas_row = cur.fetchone()
 notas = notas_row[0] if notas_row else ""
 cur.close()
@@ -90,7 +84,7 @@ if not df_receta.empty:
 else:
     costo_total = costo_por_unidad = unidades_totales = 0
 
-# ====================== PDF MEJORADO ======================
+# PDF Mejorado
 def generar_receta_pdf():
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=40, leftMargin=40, topMargin=40)
@@ -126,9 +120,8 @@ def generar_receta_pdf():
     doc.build(elements)
     return buffer.getvalue()
 
-# ====================== INTERFAZ ======================
+# Visual principal
 st.divider()
-
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Costo Total", f"${costo_total:.2f}")
 c2.metric("Costo por Unidad", f"${costo_por_unidad:.3f}")
@@ -140,7 +133,6 @@ st.divider()
 # Instrucciones
 st.subheader("📝 Instrucciones y Notas")
 notas_nuevas = st.text_area("Pasos, temperatura, tiempo, tips...", value=notas, height=120)
-
 if st.button("💾 Guardar Instrucciones"):
     conn = get_connection()
     cur = conn.cursor()
@@ -156,7 +148,7 @@ if st.button("💾 Guardar Instrucciones"):
         cur.close()
         conn.close()
 
-# ====================== AGREGAR INGREDIENTE CON UNIDAD ======================
+# Agregar ingrediente con unidad
 st.divider()
 st.subheader("Agregar / Editar Ingrediente")
 
@@ -168,8 +160,8 @@ with st.form("form_ingrediente", clear_on_submit=True):
     """, engine)
     
     insumo_sel = st.selectbox("Insumo", df_insumos_posibles['nombre'].tolist())
-    cantidad_base = st.number_input("Cantidad base (por 1 unidad producida)", min_value=0.0001, step=0.001, format="%.4f")
-    unidad_sel = st.selectbox("Unidad de medida", ["kg", "g", "unidades", "litros", "cucharadas", "cucharaditas"], index=0)
+    cantidad_base = st.number_input("Cantidad base (por 1 unidad)", min_value=0.0001, step=0.001, format="%.4f")
+    unidad_sel = st.selectbox("Unidad", ["kg", "g", "unidades", "litros", "cucharadas", "cucharaditas"], index=0)
     
     if st.form_submit_button("💾 Agregar / Actualizar", type="primary"):
         ins_id = int(df_insumos_posibles[df_insumos_posibles['nombre'] == insumo_sel]['id'].values[0])
@@ -189,29 +181,20 @@ with st.form("form_ingrediente", clear_on_submit=True):
             cur.close()
             conn.close()
 
-# Mostrar receta actual
 if not df_receta.empty:
     st.dataframe(
-        df_receta[['insumo', 'cantidad_base', 'unidad', 'subcategoria']],
-        column_config={
-            "cantidad_base": st.column_config.NumberColumn("Cantidad por 1 unidad", format="%.4f"),
-            "unidad": "Unidad"
-        },
+        df_receta[['insumo', 'cantidad_base', 'unidad']],
+        column_config={"cantidad_base": "Cantidad por 1 unidad"},
         use_container_width=True,
         hide_index=True
     )
-else:
-    st.info("Aún no hay ingredientes en esta receta.")
 
-# ====================== HISTORIAL ======================
+# Historial de producciones
 st.divider()
 st.subheader("📊 Historial de Producciones")
 
 df_historial = pd.read_sql("""
-    SELECT 
-        fecha,
-        cantidad as cantidad_producida,
-        total as costo_total
+    SELECT fecha, cantidad as cantidad_producida, total as costo_total
     FROM movimientos 
     WHERE tipo = 'produccion' AND producto_id = %s
     ORDER BY fecha DESC
@@ -219,11 +202,11 @@ df_historial = pd.read_sql("""
 """, engine, params=(plato_id,))
 
 if df_historial.empty:
-    st.info("Todavía no hay producciones registradas para este producto.")
+    st.info("Aún no hay producciones registradas.")
 else:
     st.dataframe(df_historial, use_container_width=True, hide_index=True)
 
-# ====================== ACCIONES ======================
+# Acciones
 st.divider()
 col_a, col_b = st.columns(2)
 
@@ -237,7 +220,7 @@ with col_a:
 with col_b:
     if st.button("👩‍🍳 Registrar Producción", type="primary", use_container_width=True):
         if df_receta.empty:
-            st.error("Agrega al menos un ingrediente antes de registrar.")
+            st.error("Agrega ingredientes primero.")
         else:
             conn = get_connection()
             cur = conn.cursor()
@@ -262,7 +245,7 @@ with col_b:
                 st.rerun()
             except Exception as e:
                 conn.rollback()
-                st.error(f"Error al registrar: {e}")
+                st.error(f"Error: {e}")
             finally:
                 cur.close()
                 conn.close()
