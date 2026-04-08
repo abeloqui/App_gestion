@@ -1,12 +1,19 @@
 import streamlit as st
 import pandas as pd
-from database import get_connection, get_engine
 from io import BytesIO
+from datetime import datetime
+
+# Importamos database de forma segura
+try:
+    from database import get_connection, get_engine
+except ImportError as e:
+    st.error(f"Error al importar database: {e}")
+    st.stop()
+
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
-from datetime import datetime
 
 st.set_page_config(page_title="Gestión de Recetas", layout="wide")
 
@@ -15,11 +22,11 @@ if "logged_in" not in st.session_state or not st.session_state.logged_in:
     st.stop()
 
 st.header("📋 Gestión de Recetas Avanzada")
-st.markdown("Unidades de medida + Historial de producciones")
+st.markdown("Unidades de medida por ingrediente + Historial de producciones")
 
 engine = get_engine()
 
-# Productos elaborables
+# ====================== CARGAR DATOS ======================
 df_platos = pd.read_sql("""
     SELECT id, nombre, subcategoria, precio_costo 
     FROM productos 
@@ -28,10 +35,11 @@ df_platos = pd.read_sql("""
 """, engine)
 
 if df_platos.empty:
-    st.error("No hay productos como Preelaborado o Producto Final.")
+    st.error("No hay productos configurados como Preelaborado o Producto Final.")
     st.stop()
 
 plato_seleccionado = st.selectbox("🔍 Selecciona el producto", df_platos['nombre'].tolist())
+
 plato_row = df_platos[df_platos['nombre'] == plato_seleccionado].iloc[0]
 plato_id = int(plato_row['id'])
 precio_costo_actual = float(plato_row.get('precio_costo', 0) or 0)
@@ -42,7 +50,7 @@ with col1:
 with col2:
     rinde_por_unidad = st.number_input("Rinde (unidades por 1 kg/lote)", min_value=1, value=1, step=1)
 with col3:
-    unidad_principal = st.selectbox("Unidad principal", ["kg", "unidades", "litros"], index=0)
+    unidad_principal = st.selectbox("Unidad principal del producto", ["kg", "unidades", "litros"], index=0)
 
 # ====================== RECETA CON UNIDADES ======================
 df_receta = pd.read_sql("""
@@ -51,7 +59,7 @@ df_receta = pd.read_sql("""
         i.nombre as insumo,
         i.precio_costo,
         r.cantidad as cantidad_base,
-        r.unidad,
+        COALESCE(r.unidad, 'kg') as unidad,
         i.subcategoria
     FROM recetas r
     JOIN productos i ON r.insumo_id = i.id
@@ -62,9 +70,13 @@ df_receta = pd.read_sql("""
 # Cargar notas
 conn = get_connection()
 cur = conn.cursor()
-cur.execute("SELECT notas FROM recetas WHERE plato_id = %s AND insumo_id IS NULL LIMIT 1", (plato_id,))
-notas = cur.fetchone()
-notas = notas[0] if notas else ""
+cur.execute("""
+    SELECT notas FROM recetas 
+    WHERE plato_id = %s AND insumo_id IS NULL 
+    LIMIT 1
+""", (plato_id,))
+notas_row = cur.fetchone()
+notas = notas_row[0] if notas_row else ""
 cur.close()
 conn.close()
 
@@ -93,7 +105,7 @@ def generar_receta_pdf():
     if not df_receta.empty:
         data = [["Insumo", "Cantidad", "Unidad", "Costo Total"]]
         for _, row in df_receta.iterrows():
-            data.append([row['insumo'], f"{row['cantidad_necesaria']:.3f}", row['unidad'] or 'kg', f"${row['costo_insumo']:.2f}"])
+            data.append([row['insumo'], f"{row['cantidad_necesaria']:.3f}", row['unidad'], f"${row['costo_insumo']:.2f}"])
         
         t = Table(data, colWidths=[180, 80, 60, 80])
         t.setStyle(TableStyle([
@@ -114,27 +126,31 @@ def generar_receta_pdf():
     doc.build(elements)
     return buffer.getvalue()
 
-# ====================== VISUAL ======================
+# ====================== INTERFAZ ======================
 st.divider()
+
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Costo Total", f"${costo_total:.2f}")
 c2.metric("Costo por Unidad", f"${costo_por_unidad:.3f}")
 c3.metric("Unidades Estimadas", f"{unidades_totales:.0f}")
 c4.metric("Costo Actual", f"${precio_costo_actual:.2f}")
 
-# Instrucciones
 st.divider()
+
+# Instrucciones
 st.subheader("📝 Instrucciones y Notas")
 notas_nuevas = st.text_area("Pasos, temperatura, tiempo, tips...", value=notas, height=120)
+
 if st.button("💾 Guardar Instrucciones"):
     conn = get_connection()
     cur = conn.cursor()
     try:
         cur.execute("DELETE FROM recetas WHERE plato_id = %s AND insumo_id IS NULL", (plato_id,))
         if notas_nuevas.strip():
-            cur.execute("INSERT INTO recetas (plato_id, insumo_id, cantidad, notas) VALUES (%s, NULL, 0, %s)", (plato_id, notas_nuevas))
+            cur.execute("INSERT INTO recetas (plato_id, insumo_id, cantidad, notas) VALUES (%s, NULL, 0, %s)", 
+                       (plato_id, notas_nuevas))
         conn.commit()
-        st.success("Instrucciones guardadas")
+        st.success("✅ Instrucciones guardadas")
         st.rerun()
     finally:
         cur.close()
@@ -173,71 +189,64 @@ with st.form("form_ingrediente", clear_on_submit=True):
             cur.close()
             conn.close()
 
-# Mostrar receta actual con unidades
+# Mostrar receta actual
 if not df_receta.empty:
     st.dataframe(
         df_receta[['insumo', 'cantidad_base', 'unidad', 'subcategoria']],
         column_config={
-            "cantidad_base": "Cantidad por 1 unidad",
+            "cantidad_base": st.column_config.NumberColumn("Cantidad por 1 unidad", format="%.4f"),
             "unidad": "Unidad"
         },
         use_container_width=True,
         hide_index=True
     )
+else:
+    st.info("Aún no hay ingredientes en esta receta.")
 
-# ====================== HISTORIAL DE PRODUCCIONES ======================
+# ====================== HISTORIAL ======================
 st.divider()
-st.subheader("📊 Historial de Producciones de esta Receta")
+st.subheader("📊 Historial de Producciones")
 
 df_historial = pd.read_sql("""
     SELECT 
         fecha,
         cantidad as cantidad_producida,
-        total as costo_total_registrado
+        total as costo_total
     FROM movimientos 
-    WHERE tipo = 'produccion' 
-      AND producto_id = %s
+    WHERE tipo = 'produccion' AND producto_id = %s
     ORDER BY fecha DESC
-    LIMIT 20
+    LIMIT 15
 """, engine, params=(plato_id,))
 
 if df_historial.empty:
-    st.info("Aún no hay producciones registradas para este producto.")
+    st.info("Todavía no hay producciones registradas para este producto.")
 else:
-    st.dataframe(
-        df_historial,
-        column_config={
-            "fecha": st.column_config.DatetimeColumn("Fecha", format="DD/MM/YYYY HH:mm"),
-            "cantidad_producida": "Cantidad Producida",
-            "costo_total_registrado": st.column_config.NumberColumn("Costo Total ($)", format="$%.2f")
-        },
-        use_container_width=True,
-        hide_index=True
-    )
+    st.dataframe(df_historial, use_container_width=True, hide_index=True)
 
 # ====================== ACCIONES ======================
 st.divider()
-col_a, col_b, col_c = st.columns(3)
+col_a, col_b = st.columns(2)
 
 with col_a:
     if st.button("📄 Exportar Receta a PDF", type="primary", use_container_width=True):
         pdf_bytes = generar_receta_pdf()
         st.download_button("⬇️ Descargar PDF", pdf_bytes,
-                          f"Receta_{plato_seleccionado.replace(' ','_')}.pdf", "application/pdf", use_container_width=True)
+                          f"Receta_{plato_seleccionado.replace(' ','_')}.pdf", 
+                          "application/pdf", use_container_width=True)
 
 with col_b:
     if st.button("👩‍🍳 Registrar Producción", type="primary", use_container_width=True):
         if df_receta.empty:
-            st.error("Agrega ingredientes primero.")
+            st.error("Agrega al menos un ingrediente antes de registrar.")
         else:
             conn = get_connection()
             cur = conn.cursor()
             try:
                 for _, row in df_receta.iterrows():
-                    insumo_id_df = pd.read_sql("SELECT id FROM productos WHERE nombre = %s", engine, params=(row['insumo'],))
-                    insumo_id = int(insumo_id_df.iloc[0]['id'])
+                    ins_df = pd.read_sql("SELECT id FROM productos WHERE nombre = %s", engine, params=(row['insumo'],))
+                    ins_id = int(ins_df.iloc[0]['id'])
                     cur.execute("UPDATE productos SET stock = stock - %s WHERE id = %s", 
-                               (float(row['cantidad_necesaria']), insumo_id))
+                               (float(row['cantidad_necesaria']), ins_id))
                 
                 cur.execute("UPDATE productos SET stock = stock + %s WHERE id = %s", 
                            (float(cantidad_producir), plato_id))
@@ -248,18 +257,12 @@ with col_b:
                 """, (plato_id, float(cantidad_producir), costo_por_unidad, costo_total))
                 
                 conn.commit()
-                st.success(f"Producción registrada: +{cantidad_producir:.2f} {unidad_principal} de {plato_seleccionado}")
+                st.success(f"✅ Producción registrada: +{cantidad_producir:.2f} {unidad_principal}")
                 st.balloons()
                 st.rerun()
             except Exception as e:
                 conn.rollback()
-                st.error(f"Error: {e}")
+                st.error(f"Error al registrar: {e}")
             finally:
                 cur.close()
                 conn.close()
-
-with col_c:
-    if st.button("📋 Duplicar Receta", use_container_width=True):
-        st.info("Funcionalidad de duplicar disponible en versión anterior. ¿Querés que la mantengamos?")
-
-st.caption("💡 Las unidades se guardan por ingrediente. El sistema no convierte automáticamente entre unidades todavía (próxima mejora).")
