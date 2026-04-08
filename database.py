@@ -30,6 +30,13 @@ def init_db():
             stock INTEGER NOT NULL DEFAULT 0,
             stock_minimo INTEGER DEFAULT 5
         )''')
+        # 5. Tabla de Recetas / Composición de productos
+cur.execute('''CREATE TABLE IF NOT EXISTS recetas (
+    id SERIAL PRIMARY KEY,
+    producto_padre_id INTEGER REFERENCES productos(id),
+    insumo_id INTEGER REFERENCES productos(id),
+    cantidad_necesaria REAL NOT NULL
+)''')
 
         cur.execute('''CREATE TABLE IF NOT EXISTS movimientos (
             id SERIAL PRIMARY KEY,
