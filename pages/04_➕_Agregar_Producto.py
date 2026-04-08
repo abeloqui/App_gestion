@@ -10,7 +10,14 @@ st.write("Completa los datos para dar de alta un producto en el sistema.")
 
 with st.form("new_product_form", clear_on_submit=True):
     nombre = st.text_input("Nombre del Producto (Ej: Coca Cola 1.5L)")
-    categoria = st.selectbox("Categoría", ["Bebidas", "Almacén", "Limpieza", "Fiambrería", "Otros"])
+    categoria = st.selectbox("Categoría", ["Bebidas", "Almacén", "Limpieza", "Fiambrería", "Otros", "Materia Prima", "Reposteria", "Frutos Secos", "Lácteos", "Packaging"])
+    
+    subcategoria = st.selectbox(
+        "Tipo de Stock (importante)",
+        ["Materia Prima", "Preelaborado", "Producto Final"],
+        index=0,
+        help="Esto fracciona el stock como querías"
+    )
     
     col1, col2 = st.columns(2)
     with col1:
@@ -26,11 +33,20 @@ with st.form("new_product_form", clear_on_submit=True):
             cur = conn.cursor()
             try:
                 cur.execute("""
-                    INSERT INTO productos (nombre, categoria, precio_venta, precio_costo, stock, stock_minimo)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                """, (nombre, categoria, precio_venta, precio_costo, stock_inicial, stock_minimo))
+                    INSERT INTO productos (nombre, categoria, subcategoria, precio_venta, precio_costo, stock, stock_minimo, es_producido)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    nombre, 
+                    categoria, 
+                    subcategoria, 
+                    precio_venta, 
+                    precio_costo, 
+                    stock_inicial, 
+                    stock_minimo,
+                    subcategoria != "Materia Prima"   # automático: preelaborado y final son producidos
+                ))
                 conn.commit()
-                st.success(f"✅ Producto '{nombre}' agregado correctamente.")
+                st.success(f"✅ Producto '{nombre}' agregado correctamente como **{subcategoria}**.")
             except Exception as e:
                 st.error(f"❌ Error: El producto ya existe o hay un problema con la base de datos.")
             finally:
