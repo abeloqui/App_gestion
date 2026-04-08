@@ -1,37 +1,37 @@
 import streamlit as st
-from database import get_connection
 import pandas as pd
+from database import get_connection
 
-st.header("🚚 Registro de Compras (Proveedores)")
+if "logged_in" not in st.session_state or not st.session_state.logged_in:
+    st.warning("⚠️ Inicia sesión en la página principal.")
+    st.stop()
+
+st.header("🚚 Compras y Costo Medio Ponderado")
 
 conn = get_connection()
-df_prod = pd.read_sql_query("SELECT id, nombre, stock, precio_costo FROM productos", conn)
+df_p = pd.read_sql_query("SELECT id, nombre, stock, precio_costo FROM productos", conn)
+conn.close()
 
-with st.form("compra_proveedor"):
-    prod_sel = st.selectbox("Seleccionar Producto", df_prod["nombre"].tolist())
+with st.form("compra_form"):
+    prod_compra = st.selectbox("Seleccionar Producto", df_p["nombre"].tolist())
     cant_compra = st.number_input("Cantidad Comprada", min_value=1)
-    costo_factura = st.number_input("Precio de Costo Unitario (Factura)", min_value=0.1)
+    costo_factura = st.number_input("Costo Unitario Factura", min_value=0.1)
     
     if st.form_submit_button("Registrar Ingreso"):
-        row = df_prod[df_prod["nombre"] == prod_sel].iloc[0]
-        id_p = int(row['id'])
-        stock_ant = int(row['stock'])
-        costo_ant = float(row['precio_costo'])
+        row = df_p[df_p["nombre"] == prod_compra].iloc[0]
+        id_p, s_ant, c_ant = int(row['id']), int(row['stock']), float(row['precio_costo'])
         
-        # Lógica Costo Medio Ponderado
-        nuevo_stock = stock_ant + cant_compra
-        nuevo_costo_medio = ((stock_ant * costo_ant) + (cant_compra * costo_factura)) / nuevo_stock
+        # Fórmula CMP
+        n_stock = s_ant + cant_compra
+        n_costo = ((s_ant * c_ant) + (cant_compra * costo_factura)) / n_stock
         
+        conn = get_connection()
         cur = conn.cursor()
-        # Actualizar Producto
-        cur.execute("""UPDATE productos SET stock = ?, precio_costo = ? WHERE id = ?""", 
-                    (nuevo_stock, nuevo_costo_medio, id_p))
-        # Registrar Movimiento
-        cur.execute("""INSERT INTO movimientos (tipo, producto_id, cantidad, precio_unitario, total) 
-                    VALUES ('compra', ?, ?, ?, ?)""", 
-                    (id_p, cant_compra, costo_factura, cant_compra * costo_factura))
-        
-        conn.commit()
-        st.success(f"Stock actualizado. Nuevo costo medio: ${nuevo_costo_medio:.2f}")
-
-conn.close()
+        try:
+            cur.execute("UPDATE productos SET stock = %s, precio_costo = %s WHERE id = %s", (n_stock, n_costo, id_p))
+            cur.execute("INSERT INTO movimientos (tipo, producto_id, cantidad, precio_unitario, total) VALUES ('compra', %s, %s, %s, %s)",
+                      (id_p, cant_compra, costo_factura, cant_compra * costo_factura))
+            conn.commit()
+            st.success(f"Stock actualizado. Nuevo Costo Medio: ${n_costo:.2f}")
+        finally:
+            conn.close()
