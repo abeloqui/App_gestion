@@ -9,11 +9,11 @@ if "logged_in" not in st.session_state or not st.session_state.logged_in:
     st.stop()
 
 st.header("📋 Gestión de Recetas")
-st.write("Define qué insumos (Materia Prima) se necesitan para fabricar cada Preelaborado o Producto Final.")
+st.markdown("Define los insumos necesarios para fabricar cada **Preelaborado** o **Producto Final**.")
 
 engine = get_engine()
 
-# Cargar productos separados
+# Cargar productos
 df_platos = pd.read_sql("""
     SELECT id, nombre, subcategoria 
     FROM productos 
@@ -22,122 +22,125 @@ df_platos = pd.read_sql("""
 """, engine)
 
 df_insumos = pd.read_sql("""
-    SELECT id, nombre, subcategoria 
+    SELECT id, nombre 
     FROM productos 
     WHERE subcategoria = 'Materia Prima'
     ORDER BY nombre
 """, engine)
 
-# Pestañas para separar visualmente
-tab1, tab2, tab3 = st.tabs(["➕ Agregar / Editar Receta", "📋 Ver Todas las Recetas", "🗑️ Eliminar Receta"])
+# Selección del producto
+if df_platos.empty:
+    st.error("No hay productos configurados como Preelaborado o Producto Final.")
+    st.stop()
 
-with tab1:
-    st.subheader("Crear o Actualizar Receta")
+plato_seleccionado = st.selectbox("🔍 Selecciona el producto a fabricar", df_platos['nombre'].tolist())
+plato_id = int(df_platos[df_platos['nombre'] == plato_seleccionado]['id'].values[0])
+subcat = df_platos[df_platos['nombre'] == plato_seleccionado]['subcategoria'].values[0]
+
+st.subheader(f"Receta para: **{plato_seleccionado}** ({subcat})")
+
+# ====================== CARGA DE RECETA ACTUAL ======================
+df_receta_actual = pd.read_sql("""
+    SELECT 
+        r.id as receta_id,
+        i.nombre as insumo,
+        r.cantidad,
+        i.id as insumo_id
+    FROM recetas r
+    JOIN productos i ON r.insumo_id = i.id
+    WHERE r.plato_id = %s
+    ORDER BY i.nombre
+""", engine, params=(plato_id,))
+
+# ====================== PESTAÑAS ======================
+tab_edit, tab_ver, tab_eliminar = st.tabs(["✏️ Editar Receta", "📋 Ver Receta Completa", "🗑️ Eliminar Receta"])
+
+with tab_edit:
+    col1, col2 = st.columns([3, 1])
     
-    if df_platos.empty:
-        st.warning("Primero debes tener productos como 'Preelaborado' o 'Producto Final'.")
-    else:
-        plato = st.selectbox("Producto a fabricar (Plato)", df_platos['nombre'].tolist())
-        plato_id = int(df_platos[df_platos['nombre'] == plato]['id'].values[0])
-        
-        st.info(f"**{plato}** → Receta actual:")
-        
-        # Mostrar receta existente
-        df_actual = pd.read_sql("""
-            SELECT p.nombre as insumo, r.cantidad 
-            FROM recetas r
-            JOIN productos p ON r.insumo_id = p.id
-            WHERE r.plato_id = %s
-        """, engine, params=(plato_id,))
-        
-        if not df_actual.empty:
-            st.dataframe(df_actual, use_container_width=True, hide_index=True)
-        else:
-            st.caption("Aún no tiene receta definida.")
-        
-        st.divider()
-        
-        with st.form("form_receta", clear_on_submit=True):
-            insumo = st.selectbox("Insumo (Materia Prima)", df_insumos['nombre'].tolist() if not df_insumos.empty else ["Sin insumos"])
-            cantidad = st.number_input("Cantidad necesaria por unidad de plato (gramos / kg / unidades)", min_value=0.01, step=0.01, format="%.3f")
+    with col1:
+        st.markdown("### Agregar o Modificar Insumo")
+        with st.form("form_agregar_insumo", clear_on_submit=True):
+            insumo_nombre = st.selectbox("Insumo (Materia Prima)", 
+                                        df_insumos['nombre'].tolist() if not df_insumos.empty else ["Sin insumos disponibles"])
+            cantidad = st.number_input("Cantidad por unidad producida", 
+                                     min_value=0.001, 
+                                     step=0.001, 
+                                     format="%.3f",
+                                     help="Ej: 0.250 = 250 gramos")
             
-            col_a, col_b = st.columns(2)
-            with col_a:
-                if st.form_submit_button("➕ Agregar Insumo a la Receta", use_container_width=True):
-                    if insumo and cantidad > 0:
-                        insumo_id = int(df_insumos[df_insumos['nombre'] == insumo]['id'].values[0])
-                        conn = get_connection()
-                        cur = conn.cursor()
-                        try:
-                            cur.execute("""
-                                INSERT INTO recetas (plato_id, insumo_id, cantidad)
-                                VALUES (%s, %s, %s)
-                                ON CONFLICT (plato_id, insumo_id) 
-                                DO UPDATE SET cantidad = EXCLUDED.cantidad
-                            """, (plato_id, insumo_id, cantidad))
-                            conn.commit()
-                            st.success(f"✅ {insumo} agregado a la receta de {plato}")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error: {e}")
-                        finally:
-                            cur.close()
-                            conn.close()
-            
-            with col_b:
-                if st.form_submit_button("🧹 Limpiar Receta Completa", use_container_width=True, type="secondary"):
+            if st.form_submit_button("💾 Guardar Insumo", use_container_width=True, type="primary"):
+                if insumo_nombre and cantidad > 0:
+                    insumo_id = int(df_insumos[df_insumos['nombre'] == insumo_nombre]['id'].values[0])
                     conn = get_connection()
                     cur = conn.cursor()
                     try:
-                        cur.execute("DELETE FROM recetas WHERE plato_id = %s", (plato_id,))
+                        cur.execute("""
+                            INSERT INTO recetas (plato_id, insumo_id, cantidad)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT (plato_id, insumo_id) 
+                            DO UPDATE SET cantidad = EXCLUDED.cantidad
+                        """, (plato_id, insumo_id, cantidad))
                         conn.commit()
-                        st.success(f"Receta de {plato} borrada completamente.")
+                        st.success(f"✅ {insumo_nombre} guardado correctamente ({cantidad})")
                         st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
                     finally:
                         cur.close()
                         conn.close()
 
-with tab2:
-    st.subheader("Todas las Recetas del Sistema")
-    
-    df_recetas = pd.read_sql("""
-        SELECT 
-            p.nombre as "Producto Final / Preelaborado",
-            p.subcategoria as "Tipo",
-            i.nombre as "Insumo",
-            r.cantidad as "Cantidad por unidad"
-        FROM recetas r
-        JOIN productos p ON r.plato_id = p.id
-        JOIN productos i ON r.insumo_id = i.id
-        ORDER BY p.nombre, i.nombre
-    """, engine)
-    
-    if df_recetas.empty:
-        st.info("Aún no hay recetas cargadas. Ve a la pestaña 'Agregar' para crearlas.")
-    else:
-        for producto in df_recetas["Producto Final / Preelaborado"].unique():
-            st.write(f"**{producto}**")
-            df_prod = df_recetas[df_recetas["Producto Final / Preelaborado"] == producto]
-            st.dataframe(df_prod[["Insumo", "Cantidad por unidad"]], use_container_width=True, hide_index=True)
-            st.divider()
+    with col2:
+        st.markdown("### Receta Actual")
+        if df_receta_actual.empty:
+            st.info("Aún no hay insumos en esta receta.")
+        else:
+            for _, row in df_receta_actual.iterrows():
+                with st.container():
+                    col_a, col_b, col_c = st.columns([4, 2, 1])
+                    with col_a:
+                        st.write(f"**{row['insumo']}**")
+                    with col_b:
+                        st.write(f"{row['cantidad']:.3f}")
+                    with col_c:
+                        if st.button("🗑️", key=f"del_{row['receta_id']}", help="Eliminar insumo"):
+                            conn = get_connection()
+                            cur = conn.cursor()
+                            try:
+                                cur.execute("DELETE FROM recetas WHERE id = %s", (row['receta_id'],))
+                                conn.commit()
+                                st.success(f"{row['insumo']} eliminado")
+                                st.rerun()
+                            finally:
+                                cur.close()
+                                conn.close()
+                    st.divider()
 
-with tab3:
-    st.subheader("Eliminar Receta")
-    if not df_platos.empty:
-        plato_elim = st.selectbox("Seleccionar receta a eliminar", df_platos['nombre'].tolist(), key="elim")
-        if st.button("🗑️ Eliminar toda la receta", type="primary"):
-            plato_id_elim = int(df_platos[df_platos['nombre'] == plato_elim]['id'].values[0])
+with tab_ver:
+    st.subheader("Vista Completa de la Receta")
+    if not df_receta_actual.empty:
+        df_mostrar = df_receta_actual[['insumo', 'cantidad']].copy()
+        df_mostrar.columns = ['Insumo', 'Cantidad requerida']
+        st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
+        
+        st.caption(f"Total de insumos en la receta: **{len(df_receta_actual)}**")
+    else:
+        st.info("Esta receta aún no tiene insumos cargados.")
+
+with tab_eliminar:
+    st.subheader("Eliminar Receta Completa")
+    st.warning("⚠️ Esta acción eliminará **todos** los insumos de esta receta.")
+    if st.button("🗑️ Eliminar toda la receta", type="primary"):
+        if st.checkbox("Confirmo que quiero borrar completamente esta receta"):
             conn = get_connection()
             cur = conn.cursor()
             try:
-                cur.execute("DELETE FROM recetas WHERE plato_id = %s", (plato_id_elim,))
+                cur.execute("DELETE FROM recetas WHERE plato_id = %s", (plato_id,))
                 conn.commit()
-                st.success(f"Receta de **{plato_elim}** eliminada.")
+                st.success(f"✅ Receta de **{plato_seleccionado}** eliminada completamente.")
                 st.rerun()
             finally:
                 cur.close()
                 conn.close()
-    else:
-        st.info("No hay productos para eliminar recetas.")
 
-st.caption("💡 Consejo: Usa cantidades en **kg** o **gramos** de forma consistente (ej: 0.250 para 250g).")
+st.caption("💡 Usa cantidades consistentes (ej: todo en kg o todo en gramos).")
