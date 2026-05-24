@@ -1,0 +1,114 @@
+import streamlit as st
+from database import init_db, get_engine, get_connection
+import pandas as pd
+import plotly.express as px
+
+st.set_page_config(page_title="Dulce Jazmín - Gestión", layout="wide", page_icon="🎂")
+
+try:
+    init_db()
+except Exception as e:
+    st.error(f"Error de base de datos: {e}")
+
+# --- LOGIN CON ROLES ---
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "rol" not in st.session_state:
+    st.session_state.rol = None
+
+if not st.session_state.logged_in:
+    st.title("🔐 Acceso al Sistema - Dulce Jazmín")
+    with st.form("login_form"):
+        user = st.text_input("Usuario")
+        pw = st.text_input("Contraseña", type="password")
+        if st.form_submit_button("Ingresar", use_container_width=True):
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT username, rol FROM usuarios WHERE username=%s AND password=%s AND activo=TRUE", (user, pw))
+            result = cur.fetchone()
+            conn.close()
+            if result:
+                st.session_state.logged_in = True
+                st.session_state.username = result[0]
+                st.session_state.rol = result[1]
+                st.rerun()
+            else:
+                st.error("Credenciales incorrectas o usuario inactivo.")
+else:
+    rol = st.session_state.rol
+    col_titulo, col_logout = st.columns([4, 1])
+    with col_titulo:
+        st.title(f"📊 Panel de Control — {st.session_state.username}")
+        st.caption(f"Rol: {'🔑 Administrador' if rol == 'admin' else '👤 Operador'}")
+    with col_logout:
+        if st.button("🚪 Cerrar Sesión", use_container_width=True):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+
+    engine = get_engine()
+    hoy = pd.Timestamp.now().date()
+
+    c1, c2, c3, c4 = st.columns(4)
+    try:
+        df_v = pd.read_sql(f"SELECT total, medio_pago FROM ventas WHERE fecha::date = '{hoy}'", engine)
+        c1.metric("💰 Ventas Hoy", f"${df_v['total'].sum():,.2f}")
+        c2.metric("🧾 Tickets", len(df_v))
+
+        df_crit = pd.read_sql("SELECT nombre, stock, stock_minimo FROM productos WHERE stock <= stock_minimo", engine)
+        c3.metric("⚠️ Alertas Stock", len(df_crit), delta=len(df_crit), delta_color="inverse")
+
+        df_prod_hoy = pd.read_sql(
+            f"SELECT COALESCE(SUM(cantidad), 0) as total FROM movimientos WHERE tipo='produccion' AND fecha::date = '{hoy}'", engine)
+        c4.metric("👩‍🍳 Producido Hoy", f"{df_prod_hoy['total'].iloc[0]:.1f}")
+
+        st.divider()
+
+        col_g1, col_g2 = st.columns(2)
+        with col_g1:
+            st.subheader("💳 Ventas por Medio de Pago")
+            if not df_v.empty:
+                fig = px.pie(df_v, values='total', names='medio_pago', hole=0.4,
+                             color_discrete_sequence=px.colors.qualitative.Safe)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Sin ventas registradas hoy.")
+
+        with col_g2:
+            st.subheader("🔥 Top 5 Más Vendidos")
+            df_top = pd.read_sql("""
+                SELECT p.nombre, SUM(dv.cantidad) as total
+                FROM detalle_ventas dv
+                JOIN productos p ON dv.producto_id = p.id
+                GROUP BY p.nombre ORDER BY total DESC LIMIT 5
+            """, engine)
+            if not df_top.empty:
+                fig2 = px.bar(df_top, x='total', y='nombre', orientation='h',
+                              color='total', color_continuous_scale='Viridis')
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.info("Sin datos de ventas aún.")
+
+        # Solo admin ve producción semanal y stock crítico detallado
+        if rol == 'admin':
+            st.divider()
+            col_p1, col_p2 = st.columns([2, 1])
+            with col_p1:
+                st.subheader("👩‍🍳 Producción — Últimos 7 días")
+                df_semana = pd.read_sql("""
+                    SELECT p.nombre, m.cantidad, m.fecha::date as dia
+                    FROM movimientos m JOIN productos p ON m.producto_id = p.id
+                    WHERE m.tipo = 'produccion' AND m.fecha > CURRENT_DATE - INTERVAL '7 days'
+                """, engine)
+                if not df_semana.empty:
+                    fig3 = px.area(df_semana, x="dia", y="cantidad", color="nombre")
+                    st.plotly_chart(fig3, use_container_width=True)
+                else:
+                    st.info("Sin registros de producción esta semana.")
+            with col_p2:
+                if not df_crit.empty:
+                    st.subheader("⚠️ Reponer Urgente")
+                    st.dataframe(df_crit, use_container_width=True, hide_index=True)
+
+    except Exception as e:
+        st.error(f"Error al cargar el dashboard: {e}")
