@@ -1,4 +1,4 @@
-iimport streamlit as st
+import streamlit as st
 import pandas as pd
 from database import get_connection, get_engine
 
@@ -35,28 +35,29 @@ else:
         with st.form("form_venta"):
             producto_sel = st.selectbox("Producto", df_p['nombre'].tolist())
             prod_info = df_p[df_p['nombre'] == producto_sel].iloc[0]
-            st.caption(f"Stock disponible: {prod_info['stock']} {prod_info['unidad']}")
+            st.caption(f"Disponible: {prod_info['stock']} {prod_info['unidad']}")
             cantidad = st.number_input("Cantidad", min_value=0.5, step=0.5)
 
             if st.form_submit_button("🛒 Agregar al Carrito"):
                 if cantidad > prod_info['stock']:
                     st.error(f"Stock insuficiente. Solo quedan {prod_info['stock']} {prod_info['unidad']}.")
                 else:
-                    # Verificar si el producto ya está en el carrito
+                    precio = float(prod_info['precio_venta'])
+                    cant = float(cantidad)
                     existe = False
                     for item in st.session_state.carrito:
                         if item['id'] == int(prod_info['id']):
-                            item['cantidad'] += cantidad
-                            item['subtotal'] = item['cantidad'] * item['precio']
+                            item['cantidad'] += cant
+                            item['subtotal'] = round(item['cantidad'] * item['precio'], 2)
                             existe = True
                             break
                     if not existe:
                         st.session_state.carrito.append({
                             "id": int(prod_info['id']),
-                            "nombre": producto_sel,
-                            "cantidad": cantidad,
-                            "precio": float(prod_info['precio_venta']),
-                            "subtotal": cantidad * float(prod_info['precio_venta'])
+                            "nombre": str(producto_sel),
+                            "cantidad": cant,
+                            "precio": precio,
+                            "subtotal": round(cant * precio, 2)
                         })
                     st.success(f"✅ {producto_sel} agregado.")
                     st.rerun()
@@ -69,7 +70,7 @@ else:
             df_carrito = pd.DataFrame(st.session_state.carrito)
             st.table(df_carrito[['nombre', 'cantidad', 'precio', 'subtotal']])
 
-            total_venta = df_carrito['subtotal'].sum()
+            total_venta = round(sum(item['subtotal'] for item in st.session_state.carrito), 2)
             st.write(f"### Total: ${total_venta:,.2f}")
 
             medio_pago = st.selectbox("Medio de Pago", ["Efectivo", "Transferencia", "Tarjeta"])
@@ -78,44 +79,43 @@ else:
                 conn = get_connection()
                 cur = conn.cursor()
                 try:
-    cur.execute("""
-        INSERT INTO ventas (total, medio_pago, fecha)
-        VALUES (%s, %s, NOW()) RETURNING id
-    """, (total_venta, medio_pago))
-    venta_id = cur.fetchone()[0]
+                    cur.execute(
+                        "INSERT INTO ventas (total, medio_pago, fecha) VALUES (%s, %s, NOW()) RETURNING id",
+                        (total_venta, medio_pago)
+                    )
+                    venta_id = cur.fetchone()[0]
 
-    for item in st.session_state.carrito:
-        id_prod = int(item['id'])
-        cant = float(item['cantidad'])
-        precio = float(item['precio'])
-        subtotal = float(item['subtotal'])
+                    for item in st.session_state.carrito:
+                        id_prod = int(item['id'])
+                        cant = float(item['cantidad'])
+                        precio = float(item['precio'])
+                        subtotal = float(item['subtotal'])
 
-        cur.execute("""
-            INSERT INTO detalle_ventas (venta_id, producto_id, cantidad, precio_unitario, subtotal)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (venta_id, id_prod, cant, precio, subtotal))
+                        cur.execute(
+                            "INSERT INTO detalle_ventas (venta_id, producto_id, cantidad, precio_unitario, subtotal) VALUES (%s, %s, %s, %s, %s)",
+                            (venta_id, id_prod, cant, precio, subtotal)
+                        )
+                        cur.execute(
+                            "UPDATE productos SET stock = stock - %s WHERE id = %s",
+                            (cant, id_prod)
+                        )
+                        cur.execute(
+                            "INSERT INTO movimientos (tipo, producto_id, cantidad, detalle, fecha) VALUES ('venta', %s, %s, %s, NOW())",
+                            (id_prod, cant, f"Venta #{venta_id}")
+                        )
 
-        cur.execute("""
-            UPDATE productos SET stock = stock - %s WHERE id = %s
-        """, (cant, id_prod))
-
-        cur.execute("""
-            INSERT INTO movimientos (tipo, producto_id, cantidad, detalle, fecha)
-            VALUES ('venta', %s, %s, %s, NOW())
-        """, (id_prod, cant, f"Venta #{venta_id}"))
-
-    conn.commit()
-    st.session_state.carrito = []
-    st.success("✅ Venta registrada con éxito.")
-    st.balloons()
-    st.rerun()
-except Exception as e:
-    conn.rollback()
-    st.error(f"Error al procesar la venta: {e}")
-finally:
-    conn.close()
+                    conn.commit()
+                    st.session_state.carrito = []
+                    st.success("✅ Venta registrada con éxito.")
+                    st.balloons()
+                    st.rerun()
+                except Exception as e:
+                    conn.rollback()
+                    st.error(f"Error al procesar la venta: {e}")
+                finally:
+                    conn.close()
 
             if st.button("🗑️ Vaciar Carrito"):
                 st.session_state.carrito = []
                 st.rerun()
-                
+                        
