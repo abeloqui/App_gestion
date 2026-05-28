@@ -125,3 +125,4 @@ with tab_masivo:
                 conn.close()
     else:
         st.info("No hay cambios pendientes.")
+            
