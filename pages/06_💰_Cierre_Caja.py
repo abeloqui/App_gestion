@@ -2,226 +2,127 @@ import streamlit as st
 import pandas as pd
 from database import get_connection, get_engine
 from datetime import datetime
-from io import BytesIO
-from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
 
-if "logged_in" not in st.session_state or not st.session_state.logged_in or "rol" not in st.session_state:
+if "logged_in" not in st.session_state or not st.session_state.logged_in:
     st.warning("⚠️ Inicia sesión en la página principal.")
     st.stop()
 
-st.header("🏁 Cierre de Caja y Reporte Diario")
+if st.session_state.rol != 'admin':
+    st.error("🔒 Acceso restringido. Solo administradores.")
+    st.stop()
 
-if "reporte_cierre_bin" not in st.session_state:
-    st.session_state.reporte_cierre_bin = None
+st.header("🔧 Ajuste de Stock")
+st.caption("Usá esta pantalla para corregir el stock real luego de un conteo físico.")
 
 engine = get_engine()
-conn = get_connection()
-cur = conn.cursor()
 
-# Crear tabla cierres si no existe
-cur.execute('''CREATE TABLE IF NOT EXISTS cierres (
-    id SERIAL PRIMARY KEY,
-    fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    total_ventas FLOAT DEFAULT 0,
-    total_efectivo FLOAT DEFAULT 0,
-    total_transferencia FLOAT DEFAULT 0,
-    total_tarjeta FLOAT DEFAULT 0,
-    efectivo_contado FLOAT DEFAULT 0,
-    diferencia FLOAT DEFAULT 0,
-    usuario TEXT DEFAULT 'admin'
-)''')
-conn.commit()
+# --- FILTRO POR TIPO ---
+subtipo = st.selectbox("Filtrar por tipo", ["Todos", "Materia Prima", "Preelaborado", "Producto Final"])
 
-# Obtener fecha del último cierre
-cur.execute("SELECT MAX(fecha) FROM cierres")
-ultimo_cierre = cur.fetchone()[0]
-conn.close()
+query = "SELECT id, nombre, subcategoria, unidad, stock, stock_minimo FROM productos"
+if subtipo != "Todos":
+    query += f" WHERE subcategoria = '{subtipo}'"
+query += " ORDER BY subcategoria, nombre"
 
-if ultimo_cierre:
-    desde = f"'{ultimo_cierre}'"
-    st.caption(f"📅 Mostrando ventas desde el último cierre: {ultimo_cierre.strftime('%d/%m/%Y %H:%M')}")
-else:
-    desde = "'2000-01-01'"
-    st.caption("📅 No hay cierres previos — mostrando todas las ventas.")
+df = pd.read_sql(query, engine)
 
-def generar_pdf(df_pagos, df_ventas, df_stock_bajo, efectivo_esp, contado, desde_label):
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
-    elements = []
-    styles = getSampleStyleSheet()
-    h1 = ParagraphStyle('H1', fontSize=16, alignment=1, spaceAfter=15, fontName="Helvetica-Bold")
-    h2 = ParagraphStyle('H2', fontSize=12, spaceBefore=12, spaceAfter=8, fontName="Helvetica-Bold")
-    normal = ParagraphStyle('N', fontSize=10)
+if df.empty:
+    st.info("No hay productos cargados.")
+    st.stop()
 
-    elements.append(Paragraph("CIERRE DE CAJA — DULCE JAZMÍN", h1))
-    elements.append(Paragraph(f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}", normal))
-    elements.append(Paragraph(f"Usuario: {st.session_state.username}", normal))
-    elements.append(Paragraph(f"Período: desde {desde_label}", normal))
-    elements.append(Spacer(1, 10))
+tab_individual, tab_masivo = st.tabs(["✏️ Ajuste Individual", "📋 Ajuste Masivo"])
 
-    # Resumen por medio de pago
-    elements.append(Paragraph("Ingresos por Medio de Pago", h2))
-    data_pagos = [["Medio de Pago", "Cantidad", "Total"]]
-    for _, row in df_pagos.iterrows():
-        data_pagos.append([row['medio_pago'], str(int(row['cantidad'])), f"${row['total']:,.2f}"])
-    data_pagos.append(["TOTAL", str(int(df_pagos['cantidad'].sum())), f"${df_pagos['total'].sum():,.2f}"])
-    t = Table(data_pagos, colWidths=[150, 80, 120])
-    t.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.grey),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('BACKGROUND', (0,-1), (-1,-1), colors.lightgrey),
-        ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.black),
-        ('ALIGN', (1,0), (-1,-1), 'CENTER'),
-    ]))
-    elements.append(t)
-    elements.append(Spacer(1, 10))
+with tab_individual:
+    st.subheader("Corregir stock de un producto")
+    producto_sel = st.selectbox("Seleccioná el producto", df['nombre'].tolist())
+    row = df[df['nombre'] == producto_sel].iloc[0]
 
-    diferencia = contado - efectivo_esp
-    elements.append(Paragraph(f"<b>Efectivo esperado:</b> ${efectivo_esp:,.2f}", normal))
-    elements.append(Paragraph(f"<b>Efectivo contado:</b> ${contado:,.2f}", normal))
-    color_dif = "red" if diferencia < 0 else "green"
-    elements.append(Paragraph(f'<b>Diferencia:</b> <font color="{color_dif}">${diferencia:,.2f}</font>', normal))
-    elements.append(Spacer(1, 10))
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Stock actual en sistema", f"{row['stock']} {row['unidad']}")
+    with col2:
+        st.metric("Stock mínimo", f"{row['stock_minimo']} {row['unidad']}")
 
-    # Alertas stock
-    elements.append(Paragraph("Alertas de Stock Bajo Mínimo", h2))
-    if not df_stock_bajo.empty:
-        data_stock = [["Producto", "Cantidad", "Mínimo", "Unidad"]]
-        for _, row in df_stock_bajo.iterrows():
-            data_stock.append([row['nombre'], str(row['stock']), str(row['stock_minimo']), row.get('unidad', '-')])
-        ts = Table(data_stock, colWidths=[160, 70, 70, 70])
-        ts.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.indianred),
-            ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-            ('GRID', (0,0), (-1,-1), 0.5, colors.black),
-        ]))
-        elements.append(ts)
-    else:
-        elements.append(Paragraph("✅ Sin productos bajo el mínimo.", normal))
-
-    # Detalle ventas
-    if not df_ventas.empty:
-        elements.append(Paragraph("Detalle de Ventas", h2))
-        data_v = [["#", "Hora", "Total", "Medio de Pago"]]
-        for i, row in df_ventas.iterrows():
-            hora = row['fecha'].strftime('%H:%M') if hasattr(row['fecha'], 'strftime') else str(row['fecha'])
-            data_v.append([str(i+1), hora, f"${row['total']:.2f}", row['medio_pago']])
-        tv = Table(data_v, colWidths=[30, 60, 100, 100])
-        tv.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.grey),
-            ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-            ('FONTSIZE', (0,0), (-1,-1), 8),
-        ]))
-        elements.append(tv)
-
-    doc.build(elements)
-    return buffer.getvalue()
-
-# --- CARGAR DATOS DESDE ÚLTIMO CIERRE ---
-df_pagos = pd.read_sql(f"""
-    SELECT medio_pago, SUM(total) as total, COUNT(*) as cantidad
-    FROM ventas
-    WHERE fecha > {desde}
-    GROUP BY medio_pago
-""", engine)
-
-df_ventas = pd.read_sql(f"""
-    SELECT id, fecha, total, medio_pago
-    FROM ventas
-    WHERE fecha > {desde}
-    ORDER BY fecha ASC
-""", engine)
-
-df_alertas = pd.read_sql("""
-    SELECT nombre, stock, stock_minimo, unidad
-    FROM productos WHERE stock <= stock_minimo
-""", engine)
-
-# --- INTERFAZ ---
-if df_ventas.empty:
-    st.info("No hay ventas registradas desde el último cierre.")
-else:
-    total_dia = float(df_pagos['total'].sum())
-    efectivo_esp = float(df_pagos[df_pagos['medio_pago'] == 'Efectivo']['total'].sum()) if 'Efectivo' in df_pagos['medio_pago'].values else 0.0
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("💰 Total del Período", f"${total_dia:,.2f}")
-    c2.metric("🧾 Ventas", len(df_ventas))
-    c3.metric("💵 Efectivo Esperado", f"${efectivo_esp:,.2f}")
-
-    st.divider()
-    st.dataframe(df_pagos[['medio_pago', 'cantidad', 'total']], use_container_width=True, hide_index=True)
-
-    if not df_alertas.empty:
-        st.divider()
-        st.error(f"⚠️ {len(df_alertas)} producto(s) bajo el mínimo.")
-        st.dataframe(df_alertas, use_container_width=True, hide_index=True)
-
-    st.divider()
-    st.subheader("📝 Confirmación de Cierre")
-    contado = st.number_input("Efectivo contado físicamente ($)", min_value=0.0, step=100.0)
-
-    diferencia = contado - efectivo_esp
-    if contado > 0:
-        if diferencia == 0:
-            st.success("✅ Caja cuadrada.")
-        elif diferencia > 0:
-            st.warning(f"💰 Sobran ${diferencia:,.2f} en caja.")
-        else:
-            st.error(f"⚠️ Faltan ${abs(diferencia):,.2f} en caja.")
-
-    if st.button("🚀 GENERAR CIERRE Y PDF", type="primary", use_container_width=True):
-        # Registrar el cierre en la BD
-        conn2 = get_connection()
-        cur2 = conn2.cursor()
-        try:
-            total_transf = float(df_pagos[df_pagos['medio_pago'] == 'Transferencia']['total'].sum()) if 'Transferencia' in df_pagos['medio_pago'].values else 0.0
-            total_tarj = float(df_pagos[df_pagos['medio_pago'] == 'Tarjeta']['total'].sum()) if 'Tarjeta' in df_pagos['medio_pago'].values else 0.0
-
-            cur2.execute("""
-                INSERT INTO cierres (total_ventas, total_efectivo, total_transferencia, total_tarjeta, efectivo_contado, diferencia, usuario)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (total_dia, efectivo_esp, total_transf, total_tarj, float(contado), float(diferencia), st.session_state.username))
-            conn2.commit()
-
-            desde_label = ultimo_cierre.strftime('%d/%m/%Y %H:%M') if ultimo_cierre else "el inicio"
-            pdf_bin = generar_pdf(df_pagos, df_ventas, df_alertas, efectivo_esp, contado, desde_label)
-            st.session_state.reporte_cierre_bin = pdf_bin
-            st.success("✅ Cierre registrado. Las ventas del próximo período se contarán desde ahora.")
-        except Exception as e:
-            conn2.rollback()
-            st.error(f"Error al registrar el cierre: {e}")
-        finally:
-            conn2.close()
-
-if st.session_state.reporte_cierre_bin:
-    st.download_button(
-        "📥 DESCARGAR REPORTE PDF",
-        st.session_state.reporte_cierre_bin,
-        file_name=f"cierre_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-        mime="application/pdf",
-        use_container_width=True
+    nuevo_stock = st.number_input(
+        f"Stock real contado ({row['unidad']})",
+        min_value=0.0,
+        value=float(row['stock']),
+        step=0.5
     )
-    st.balloons()
-    if st.button("🧹 Limpiar Pantalla"):
-        st.session_state.reporte_cierre_bin = None
-        st.rerun()
+    motivo = st.text_input("Motivo del ajuste (opcional)", placeholder="Ej: Conteo físico 27/05")
 
-# Historial de cierres (solo admin)
-if st.session_state.rol == 'admin':
-    st.divider()
-    st.subheader("📋 Historial de Cierres")
-    df_hist = pd.read_sql("""
-        SELECT fecha, total_ventas, total_efectivo, total_transferencia,
-               total_tarjeta, efectivo_contado, diferencia, usuario
-        FROM cierres ORDER BY fecha DESC LIMIT 10
-    """, engine)
-    if df_hist.empty:
-        st.info("Sin cierres registrados aún.")
+    if st.button("💾 Guardar Ajuste", type="primary", use_container_width=True):
+        diferencia = nuevo_stock - float(row['stock'])
+        conn = get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute("UPDATE productos SET stock = %s WHERE id = %s", (nuevo_stock, int(row['id'])))
+            cur.execute("""
+                INSERT INTO movimientos (tipo, producto_id, cantidad, detalle, fecha)
+                VALUES ('ajuste', %s, %s, %s, NOW())
+            """, (
+                int(row['id']),
+                diferencia,
+                motivo or f"Ajuste manual por {st.session_state.username}"
+            ))
+            conn.commit()
+            signo = "+" if diferencia >= 0 else ""
+            st.success(f"✅ Stock de '{producto_sel}' actualizado a {nuevo_stock} {row['unidad']} ({signo}{diferencia:.1f})")
+        except Exception as e:
+            conn.rollback()
+            st.error(f"Error: {e}")
+        finally:
+            conn.close()
+
+with tab_masivo:
+    st.subheader("Corregir múltiples productos a la vez")
+    st.caption("Editá la columna 'stock_real' con los valores del conteo físico y guardá.")
+
+    df_edit = df[['nombre', 'subcategoria', 'unidad', 'stock']].copy()
+    df_edit = df_edit.rename(columns={'stock': 'stock_sistema'})
+    df_edit['stock_real'] = df_edit['stock_sistema']
+
+    edited = st.data_editor(
+        df_edit,
+        column_config={
+            "nombre": st.column_config.TextColumn("Producto", disabled=True),
+            "subcategoria": st.column_config.TextColumn("Tipo", disabled=True),
+            "unidad": st.column_config.TextColumn("Unidad", disabled=True),
+            "stock_sistema": st.column_config.NumberColumn("Stock Sistema", disabled=True),
+            "stock_real": st.column_config.NumberColumn("Stock Real ✏️", min_value=0.0, step=0.5),
+        },
+        use_container_width=True,
+        hide_index=True
+    )
+
+    cambios = edited[edited['stock_real'] != edited['stock_sistema']]
+
+    if not cambios.empty:
+        st.warning(f"⚠️ Hay {len(cambios)} producto(s) con cambios pendientes de guardar.")
+        st.dataframe(cambios[['nombre', 'stock_sistema', 'stock_real', 'unidad']], 
+                     use_container_width=True, hide_index=True)
+
+        if st.button("💾 Guardar Todos los Cambios", type="primary", use_container_width=True):
+            conn = get_connection()
+            cur = conn.cursor()
+            try:
+                for _, row_c in cambios.iterrows():
+                    prod_row = df[df['nombre'] == row_c['nombre']].iloc[0]
+                    diferencia = row_c['stock_real'] - row_c['stock_sistema']
+                    cur.execute("UPDATE productos SET stock = %s WHERE nombre = %s",
+                                (row_c['stock_real'], row_c['nombre']))
+                    cur.execute("""
+                        INSERT INTO movimientos (tipo, producto_id, cantidad, detalle, fecha)
+                        VALUES ('ajuste', %s, %s, %s, NOW())
+                    """, (int(prod_row['id']), diferencia, f"Ajuste masivo por {st.session_state.username}"))
+                conn.commit()
+                st.success(f"✅ {len(cambios)} productos actualizados correctamente.")
+                st.rerun()
+            except Exception as e:
+                conn.rollback()
+                st.error(f"Error: {e}")
+            finally:
+                conn.close()
     else:
-        st.dataframe(df_hist, use_container_width=True, hide_index=True)
+        st.info("No hay cambios pendientes.")
+                    
