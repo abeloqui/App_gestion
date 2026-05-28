@@ -112,4 +112,4 @@ else:
             if st.button("🗑️ Vaciar Carrito"):
                 st.session_state.carrito = []
                 st.rerun()
-        
+                
