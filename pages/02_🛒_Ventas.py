@@ -1,4 +1,4 @@
-import streamlit as st
+iimport streamlit as st
 import pandas as pd
 from database import get_connection, get_engine
 
@@ -78,36 +78,42 @@ else:
                 conn = get_connection()
                 cur = conn.cursor()
                 try:
-                    cur.execute("""
-                        INSERT INTO ventas (total, medio_pago, fecha)
-                        VALUES (%s, %s, NOW()) RETURNING id
-                    """, (total_venta, medio_pago))
-                    venta_id = cur.fetchone()[0]
+    cur.execute("""
+        INSERT INTO ventas (total, medio_pago, fecha)
+        VALUES (%s, %s, NOW()) RETURNING id
+    """, (total_venta, medio_pago))
+    venta_id = cur.fetchone()[0]
 
-                    for item in st.session_state.carrito:
-                        cur.execute("""
-                            INSERT INTO detalle_ventas (venta_id, producto_id, cantidad, precio_unitario, subtotal)
-                            VALUES (%s, %s, %s, %s, %s)
-                        """, (venta_id, item['id'], item['cantidad'], item['precio'], item['subtotal']))
+    for item in st.session_state.carrito:
+        id_prod = int(item['id'])
+        cant = float(item['cantidad'])
+        precio = float(item['precio'])
+        subtotal = float(item['subtotal'])
 
-                        cur.execute("UPDATE productos SET stock = stock - %s WHERE id = %s",
-                                    (item['cantidad'], item['id']))
+        cur.execute("""
+            INSERT INTO detalle_ventas (venta_id, producto_id, cantidad, precio_unitario, subtotal)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (venta_id, id_prod, cant, precio, subtotal))
 
-                        cur.execute("""
-                            INSERT INTO movimientos (tipo, producto_id, cantidad, detalle, fecha)
-                            VALUES ('venta', %s, %s, %s, NOW())
-                        """, (item['id'], item['cantidad'], f"Venta #{venta_id}"))
+        cur.execute("""
+            UPDATE productos SET stock = stock - %s WHERE id = %s
+        """, (cant, id_prod))
 
-                    conn.commit()
-                    st.session_state.carrito = []
-                    st.success("✅ Venta registrada con éxito.")
-                    st.balloons()
-                    st.rerun()
-                except Exception as e:
-                    conn.rollback()
-                    st.error(f"Error al procesar la venta: {e}")
-                finally:
-                    conn.close()
+        cur.execute("""
+            INSERT INTO movimientos (tipo, producto_id, cantidad, detalle, fecha)
+            VALUES ('venta', %s, %s, %s, NOW())
+        """, (id_prod, cant, f"Venta #{venta_id}"))
+
+    conn.commit()
+    st.session_state.carrito = []
+    st.success("✅ Venta registrada con éxito.")
+    st.balloons()
+    st.rerun()
+except Exception as e:
+    conn.rollback()
+    st.error(f"Error al procesar la venta: {e}")
+finally:
+    conn.close()
 
             if st.button("🗑️ Vaciar Carrito"):
                 st.session_state.carrito = []
