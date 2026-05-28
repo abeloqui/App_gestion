@@ -3,6 +3,7 @@ import streamlit as st
 import os
 from sqlalchemy import create_engine
 
+# --- CONFIGURACIÓN DE CONEXIÓN ---
 @st.cache_resource
 def get_engine():
     db_url = st.secrets.get("DATABASE_URL") or os.environ.get("DATABASE_URL")
@@ -31,7 +32,7 @@ def init_db():
             creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
 
-        # Admin por defecto
+        # Usuario admin por defecto
         cur.execute("""
             INSERT INTO usuarios (username, password, rol)
             VALUES ('admin', '1234', 'admin')
@@ -84,6 +85,7 @@ def init_db():
             usuario TEXT DEFAULT 'admin'
         )''')
 
+        # Migraciones seguras
         migraciones = [
             "ALTER TABLE productos ADD COLUMN IF NOT EXISTS unidad TEXT DEFAULT 'unidad';",
             "ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS costo_unitario FLOAT DEFAULT 0;",
@@ -109,3 +111,4 @@ def init_db():
 
 if __name__ == "__main__":
     init_db()
+    
