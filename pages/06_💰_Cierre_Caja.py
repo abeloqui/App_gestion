@@ -8,7 +8,23 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-if "logged_in" not in st.session_state or not st.session_state.logged_in:
+from streamlit_cookies_manager import EncryptedCookieManager
+
+# --- COOKIES: restaurar sesión ---
+cookies = EncryptedCookieManager(prefix="dulcejazmin_", password="dj_secret_2024_$")
+if not cookies.ready():
+    st.stop()
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = cookies.get("logged_in") == "true"
+if "username" not in st.session_state:
+    st.session_state.username = cookies.get("username") or None
+if "rol" not in st.session_state:
+    st.session_state.rol = cookies.get("rol") or None
+
+
+
+if "logged_in" not in st.session_state or not st.session_state.logged_in or "rol" not in st.session_state:
     st.warning("⚠️ Inicia sesión en la página principal.")
     st.stop()
 
@@ -17,133 +33,153 @@ st.header("🏁 Cierre de Caja y Reporte Diario")
 if "reporte_cierre_bin" not in st.session_state:
     st.session_state.reporte_cierre_bin = None
 
-def generar_reporte_cierre_pdf(df_pagos, df_ventas, df_stock_bajo, efectivo_esp, contado, fecha):
+engine = get_engine()
+conn = get_connection()
+cur = conn.cursor()
+
+# Crear tabla cierres si no existe
+cur.execute('''CREATE TABLE IF NOT EXISTS cierres (
+    id SERIAL PRIMARY KEY,
+    fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    total_ventas FLOAT DEFAULT 0,
+    total_efectivo FLOAT DEFAULT 0,
+    total_transferencia FLOAT DEFAULT 0,
+    total_tarjeta FLOAT DEFAULT 0,
+    efectivo_contado FLOAT DEFAULT 0,
+    diferencia FLOAT DEFAULT 0,
+    usuario TEXT DEFAULT 'admin'
+)''')
+conn.commit()
+
+# Obtener fecha del último cierre
+cur.execute("SELECT MAX(fecha) FROM cierres")
+ultimo_cierre = cur.fetchone()[0]
+conn.close()
+
+if ultimo_cierre:
+    desde = f"'{ultimo_cierre}'"
+    st.caption(f"📅 Mostrando ventas desde el último cierre: {ultimo_cierre.strftime('%d/%m/%Y %H:%M')}")
+else:
+    desde = "'2000-01-01'"
+    st.caption("📅 No hay cierres previos — mostrando todas las ventas.")
+
+def generar_pdf(df_pagos, df_ventas, df_stock_bajo, efectivo_esp, contado, desde_label):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
     elements = []
     styles = getSampleStyleSheet()
+    h1 = ParagraphStyle('H1', fontSize=16, alignment=1, spaceAfter=15, fontName="Helvetica-Bold")
+    h2 = ParagraphStyle('H2', fontSize=12, spaceBefore=12, spaceAfter=8, fontName="Helvetica-Bold")
+    normal = ParagraphStyle('N', fontSize=10)
 
-    estilo_h1 = ParagraphStyle('H1', fontSize=16, alignment=1, spaceAfter=20, fontName="Helvetica-Bold")
-    estilo_h2 = ParagraphStyle('H2', fontSize=12, spaceBefore=15, spaceAfter=10, fontName="Helvetica-Bold")
-    estilo_texto = ParagraphStyle('N', fontSize=10)
-
-    # Encabezado
-    elements.append(Paragraph(f"REPORTE DE CIERRE DIARIO - DULCE JAZMÍN", estilo_h1))
-    elements.append(Paragraph(f"Fecha: {fecha}", estilo_texto))
-    elements.append(Paragraph(f"Generado por: {st.session_state.username}", estilo_texto))
-    elements.append(Paragraph(f"Hora de cierre: {datetime.now().strftime('%H:%M')}", estilo_texto))
+    elements.append(Paragraph("CIERRE DE CAJA — DULCE JAZMÍN", h1))
+    elements.append(Paragraph(f"Generado: {datetime.now().strftime('%d/%m/%Y %H:%M')}", normal))
+    elements.append(Paragraph(f"Usuario: {st.session_state.username}", normal))
+    elements.append(Paragraph(f"Período: desde {desde_label}", normal))
     elements.append(Spacer(1, 10))
 
-    # 1. Resumen Financiero
-    elements.append(Paragraph("1. Resumen de Ingresos por Medio de Pago", estilo_h2))
-    data_pagos = [["Medio de Pago", "Total Recaudado"]]
+    # Resumen por medio de pago
+    elements.append(Paragraph("Ingresos por Medio de Pago", h2))
+    data_pagos = [["Medio de Pago", "Cantidad", "Total"]]
     for _, row in df_pagos.iterrows():
-        data_pagos.append([str(row['medio_pago']), f"${row['total']:,.2f}"])
-    data_pagos.append(["TOTAL", f"${df_pagos['total'].sum():,.2f}"])
-
-    t_pagos = Table(data_pagos, colWidths=[120, 120])
-    t_pagos.setStyle(TableStyle([
+        data_pagos.append([row['medio_pago'], str(int(row['cantidad'])), f"${row['total']:,.2f}"])
+    data_pagos.append(["TOTAL", str(int(df_pagos['cantidad'].sum())), f"${df_pagos['total'].sum():,.2f}"])
+    t = Table(data_pagos, colWidths=[150, 80, 120])
+    t.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.grey),
         ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
         ('BACKGROUND', (0,-1), (-1,-1), colors.lightgrey),
         ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.black)
+        ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+        ('ALIGN', (1,0), (-1,-1), 'CENTER'),
     ]))
-    elements.append(t_pagos)
+    elements.append(t)
     elements.append(Spacer(1, 10))
 
     diferencia = contado - efectivo_esp
-    elements.append(Paragraph(f"<b>Efectivo Esperado en Caja:</b> ${efectivo_esp:,.2f}", estilo_texto))
-    elements.append(Paragraph(f"<b>Efectivo Contado Físicamente:</b> ${contado:,.2f}", estilo_texto))
+    elements.append(Paragraph(f"<b>Efectivo esperado:</b> ${efectivo_esp:,.2f}", normal))
+    elements.append(Paragraph(f"<b>Efectivo contado:</b> ${contado:,.2f}", normal))
     color_dif = "red" if diferencia < 0 else "green"
-    elements.append(Paragraph(f'<b>Diferencia:</b> <font color="{color_dif}">${diferencia:,.2f}</font>', estilo_texto))
+    elements.append(Paragraph(f'<b>Diferencia:</b> <font color="{color_dif}">${diferencia:,.2f}</font>', normal))
     elements.append(Spacer(1, 10))
 
-    # 2. Alertas de Stock
-    elements.append(Paragraph("2. Alertas de Inventario (Bajo Mínimo)", estilo_h2))
+    # Alertas stock
+    elements.append(Paragraph("Alertas de Stock Bajo Mínimo", h2))
     if not df_stock_bajo.empty:
-        data_stock = [["Producto", "Stock Actual", "Mínimo", "Unidad"]]
+        data_stock = [["Producto", "Cantidad", "Mínimo", "Unidad"]]
         for _, row in df_stock_bajo.iterrows():
             data_stock.append([row['nombre'], str(row['stock']), str(row['stock_minimo']), row.get('unidad', '-')])
-        t_stock = Table(data_stock, colWidths=[160, 70, 70, 70])
-        t_stock.setStyle(TableStyle([
+        ts = Table(data_stock, colWidths=[160, 70, 70, 70])
+        ts.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.indianred),
             ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-            ('GRID', (0,0), (-1,-1), 0.5, colors.black)
+            ('GRID', (0,0), (-1,-1), 0.5, colors.black),
         ]))
-        elements.append(t_stock)
+        elements.append(ts)
     else:
-        elements.append(Paragraph("✅ No hay productos bajo el nivel crítico.", estilo_texto))
+        elements.append(Paragraph("✅ Sin productos bajo el mínimo.", normal))
 
-    # 3. Detalle de Ventas
-    elements.append(Paragraph("3. Detalle de Operaciones del Día", estilo_h2))
+    # Detalle ventas
     if not df_ventas.empty:
+        elements.append(Paragraph("Detalle de Ventas", h2))
         data_v = [["#", "Hora", "Total", "Medio de Pago"]]
         for i, row in df_ventas.iterrows():
             hora = row['fecha'].strftime('%H:%M') if hasattr(row['fecha'], 'strftime') else str(row['fecha'])
             data_v.append([str(i+1), hora, f"${row['total']:.2f}", row['medio_pago']])
-        t_v = Table(data_v, colWidths=[30, 60, 100, 100])
-        t_v.setStyle(TableStyle([
+        tv = Table(data_v, colWidths=[30, 60, 100, 100])
+        tv.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.grey),
             ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
             ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
-            ('FONTSIZE', (0,0), (-1,-1), 8)
+            ('FONTSIZE', (0,0), (-1,-1), 8),
         ]))
-        elements.append(t_v)
-    else:
-        elements.append(Paragraph("Sin ventas registradas.", estilo_texto))
+        elements.append(tv)
 
     doc.build(elements)
     return buffer.getvalue()
 
-# --- INTERFAZ ---
-engine = get_engine()
-hoy = pd.Timestamp.now().date()
-
+# --- CARGAR DATOS DESDE ÚLTIMO CIERRE ---
 df_pagos = pd.read_sql(f"""
-    SELECT medio_pago, SUM(total) as total 
-    FROM ventas 
-    WHERE fecha::date = '{hoy}' 
+    SELECT medio_pago, SUM(total) as total, COUNT(*) as cantidad
+    FROM ventas
+    WHERE fecha > {desde}
     GROUP BY medio_pago
 """, engine)
 
 df_ventas = pd.read_sql(f"""
-    SELECT id, fecha, total, medio_pago 
-    FROM ventas 
-    WHERE fecha::date = '{hoy}' 
+    SELECT id, fecha, total, medio_pago
+    FROM ventas
+    WHERE fecha > {desde}
     ORDER BY fecha ASC
 """, engine)
 
 df_alertas = pd.read_sql("""
-    SELECT nombre, stock, stock_minimo, unidad 
-    FROM productos 
-    WHERE stock <= stock_minimo
+    SELECT nombre, stock, stock_minimo, unidad
+    FROM productos WHERE stock <= stock_minimo
 """, engine)
 
+# --- INTERFAZ ---
 if df_ventas.empty:
-    st.info("Aún no hay ventas registradas hoy.")
+    st.info("No hay ventas registradas desde el último cierre.")
 else:
-    st.subheader(f"Balance del día: {hoy.strftime('%d/%m/%Y')}")
-
-    c1, c2, c3 = st.columns(3)
-    total_dia = df_pagos['total'].sum()
+    total_dia = float(df_pagos['total'].sum())
     efectivo_esp = float(df_pagos[df_pagos['medio_pago'] == 'Efectivo']['total'].sum()) if 'Efectivo' in df_pagos['medio_pago'].values else 0.0
 
-    c1.metric("💰 Total del Día", f"${total_dia:,.2f}")
-    c2.metric("🧾 Tickets", len(df_ventas))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("💰 Total del Período", f"${total_dia:,.2f}")
+    c2.metric("🧾 Ventas", len(df_ventas))
     c3.metric("💵 Efectivo Esperado", f"${efectivo_esp:,.2f}")
 
     st.divider()
-    st.dataframe(df_pagos, use_container_width=True, hide_index=True)
+    st.dataframe(df_pagos[['medio_pago', 'cantidad', 'total']], use_container_width=True, hide_index=True)
 
     if not df_alertas.empty:
         st.divider()
-        st.error(f"⚠️ {len(df_alertas)} producto(s) bajo el mínimo — revisar antes de cerrar.")
+        st.error(f"⚠️ {len(df_alertas)} producto(s) bajo el mínimo.")
         st.dataframe(df_alertas, use_container_width=True, hide_index=True)
 
     st.divider()
-    st.write("### 📝 Confirmación de Cierre")
+    st.subheader("📝 Confirmación de Cierre")
     contado = st.number_input("Efectivo contado físicamente ($)", min_value=0.0, step=100.0)
 
     diferencia = contado - efectivo_esp
@@ -156,20 +192,53 @@ else:
             st.error(f"⚠️ Faltan ${abs(diferencia):,.2f} en caja.")
 
     if st.button("🚀 GENERAR CIERRE Y PDF", type="primary", use_container_width=True):
-        pdf_bin = generar_reporte_cierre_pdf(df_pagos, df_ventas, df_alertas, efectivo_esp, contado, hoy)
-        st.session_state.reporte_cierre_bin = pdf_bin
-        st.success("✅ Reporte generado.")
+        # Registrar el cierre en la BD
+        conn2 = get_connection()
+        cur2 = conn2.cursor()
+        try:
+            total_transf = float(df_pagos[df_pagos['medio_pago'] == 'Transferencia']['total'].sum()) if 'Transferencia' in df_pagos['medio_pago'].values else 0.0
+            total_tarj = float(df_pagos[df_pagos['medio_pago'] == 'Tarjeta']['total'].sum()) if 'Tarjeta' in df_pagos['medio_pago'].values else 0.0
+
+            cur2.execute("""
+                INSERT INTO cierres (total_ventas, total_efectivo, total_transferencia, total_tarjeta, efectivo_contado, diferencia, usuario)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (total_dia, efectivo_esp, total_transf, total_tarj, float(contado), float(diferencia), st.session_state.username))
+            conn2.commit()
+
+            desde_label = ultimo_cierre.strftime('%d/%m/%Y %H:%M') if ultimo_cierre else "el inicio"
+            pdf_bin = generar_pdf(df_pagos, df_ventas, df_alertas, efectivo_esp, contado, desde_label)
+            st.session_state.reporte_cierre_bin = pdf_bin
+            st.success("✅ Cierre registrado. Las ventas del próximo período se contarán desde ahora.")
+        except Exception as e:
+            conn2.rollback()
+            st.error(f"Error al registrar el cierre: {e}")
+        finally:
+            conn2.close()
 
 if st.session_state.reporte_cierre_bin:
-    st.balloons()
     st.download_button(
-        label="📥 DESCARGAR REPORTE PDF",
-        data=st.session_state.reporte_cierre_bin,
-        file_name=f"cierre_caja_{hoy}.pdf",
+        "📥 DESCARGAR REPORTE PDF",
+        st.session_state.reporte_cierre_bin,
+        file_name=f"cierre_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
         mime="application/pdf",
         use_container_width=True
     )
+    st.balloons()
     if st.button("🧹 Limpiar Pantalla"):
         st.session_state.reporte_cierre_bin = None
         st.rerun()
+
+# Historial de cierres (solo admin)
+if st.session_state.rol == 'admin':
+    st.divider()
+    st.subheader("📋 Historial de Cierres")
+    df_hist = pd.read_sql("""
+        SELECT fecha, total_ventas, total_efectivo, total_transferencia,
+               total_tarjeta, efectivo_contado, diferencia, usuario
+        FROM cierres ORDER BY fecha DESC LIMIT 10
+    """, engine)
+    if df_hist.empty:
+        st.info("Sin cierres registrados aún.")
+    else:
+        st.dataframe(df_hist, use_container_width=True, hide_index=True)
     
