@@ -2,9 +2,25 @@ import streamlit as st
 import pandas as pd
 from database import get_connection, get_engine
 
+from streamlit_cookies_manager import EncryptedCookieManager
+
+# --- COOKIES: restaurar sesión ---
+cookies = EncryptedCookieManager(prefix="dulcejazmin_", password="dj_secret_2024_$")
+if not cookies.ready():
+    st.stop()
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = cookies.get("logged_in") == "true"
+if "username" not in st.session_state:
+    st.session_state.username = cookies.get("username") or None
+if "rol" not in st.session_state:
+    st.session_state.rol = cookies.get("rol") or None
+
+
+
 st.set_page_config(page_title="Punto de Venta", layout="wide")
 
-if "logged_in" not in st.session_state or not st.session_state.logged_in:
+if "logged_in" not in st.session_state or not st.session_state.logged_in or "rol" not in st.session_state:
     st.warning("⚠️ Inicia sesión en la página principal.")
     st.stop()
 
