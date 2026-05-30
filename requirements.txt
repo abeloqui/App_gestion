@@ -5,3 +5,4 @@ reportlab
 SQLAlchemy
 plotly
 openpyxl
+streamlit-cookies-manager
