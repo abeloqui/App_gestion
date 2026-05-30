@@ -16,15 +16,14 @@ if "username" not in st.session_state:
 if "rol" not in st.session_state:
     st.session_state.rol = cookies.get("rol") or None
 
-
-
-if "logged_in" not in st.session_state or not st.session_state.logged_in or "rol" not in st.session_state:
+if not st.session_state.logged_in:
     st.warning("⚠️ Inicia sesión en la página principal.")
     st.stop()
 
-if st.session_state.rol != 'admin':
-    st.error("🔒 Acceso restringido. Solo el administrador puede gestionar usuarios.")
+if st.session_state.get("rol") != "admin":
+    st.error("🔒 Acceso restringido. Solo administradores.")
     st.stop()
+
 
 st.header("👥 Gestión de Usuarios")
 
@@ -115,3 +114,4 @@ with tab_cambiar_pass:
                     st.error(f"Error: {e}")
                 finally:
                     conn.close()
+                        
