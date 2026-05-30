@@ -3,11 +3,11 @@ import pandas as pd
 from database import get_connection, get_engine
 from datetime import datetime
 
-if "logged_in" not in st.session_state or not st.session_state.logged_in or "rol" not in st.session_state:
+if "logged_in" not in st.session_state or not st.session_state.logged_in:
     st.warning("⚠️ Inicia sesión en la página principal.")
     st.stop()
 
-if st.session_state.get('rol') != 'admin':
+if st.session_state.rol != 'admin':
     st.error("🔒 Acceso restringido. Solo administradores.")
     st.stop()
 
@@ -16,6 +16,7 @@ st.caption("Usá esta pantalla para corregir el stock real luego de un conteo f�
 
 engine = get_engine()
 
+# --- FILTRO POR TIPO ---
 subtipo = st.selectbox("Filtrar por tipo", ["Todos", "Materia Prima", "Preelaborado", "Producto Final"])
 
 query = "SELECT id, nombre, subcategoria, unidad, stock, stock_minimo FROM productos"
@@ -40,7 +41,7 @@ with tab_individual:
     with col1:
         st.metric("Stock actual en sistema", f"{row['stock']} {row['unidad']}")
     with col2:
-        st.metric("Mínimo", f"{row['stock_minimo']} {row['unidad']}")
+        st.metric("Stock mínimo", f"{row['stock_minimo']} {row['unidad']}")
 
     nuevo_stock = st.number_input(
         f"Stock real contado ({row['unidad']})",
@@ -61,7 +62,7 @@ with tab_individual:
                 VALUES ('ajuste', %s, %s, %s, NOW())
             """, (
                 int(row['id']),
-                float(diferencia),
+                diferencia,
                 motivo or f"Ajuste manual por {st.session_state.username}"
             ))
             conn.commit()
@@ -98,7 +99,7 @@ with tab_masivo:
 
     if not cambios.empty:
         st.warning(f"⚠️ Hay {len(cambios)} producto(s) con cambios pendientes de guardar.")
-        st.dataframe(cambios[['nombre', 'stock_sistema', 'stock_real', 'unidad']],
+        st.dataframe(cambios[['nombre', 'stock_sistema', 'stock_real', 'unidad']], 
                      use_container_width=True, hide_index=True)
 
         if st.button("💾 Guardar Todos los Cambios", type="primary", use_container_width=True):
@@ -107,9 +108,9 @@ with tab_masivo:
             try:
                 for _, row_c in cambios.iterrows():
                     prod_row = df[df['nombre'] == row_c['nombre']].iloc[0]
-                    diferencia = float(row_c['stock_real']) - float(row_c['stock_sistema'])
+                    diferencia = row_c['stock_real'] - row_c['stock_sistema']
                     cur.execute("UPDATE productos SET stock = %s WHERE nombre = %s",
-                                (float(row_c['stock_real']), row_c['nombre']))
+                                (row_c['stock_real'], row_c['nombre']))
                     cur.execute("""
                         INSERT INTO movimientos (tipo, producto_id, cantidad, detalle, fecha)
                         VALUES ('ajuste', %s, %s, %s, NOW())
@@ -124,3 +125,4 @@ with tab_masivo:
                 conn.close()
     else:
         st.info("No hay cambios pendientes.")
+                    
