@@ -16,11 +16,10 @@ if "username" not in st.session_state:
 if "rol" not in st.session_state:
     st.session_state.rol = cookies.get("rol") or None
 
-
-
-if "logged_in" not in st.session_state or not st.session_state.logged_in or "rol" not in st.session_state:
-    st.warning("⚠️ Inicia sesión.")
+if not st.session_state.logged_in:
+    st.warning("⚠️ Inicia sesión en la página principal.")
     st.stop()
+
 
 st.header("➕ Gestión de Productos")
 
