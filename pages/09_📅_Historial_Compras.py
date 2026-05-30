@@ -17,15 +17,14 @@ if "username" not in st.session_state:
 if "rol" not in st.session_state:
     st.session_state.rol = cookies.get("rol") or None
 
-
-
-if "logged_in" not in st.session_state or not st.session_state.logged_in or "rol" not in st.session_state:
+if not st.session_state.logged_in:
     st.warning("⚠️ Inicia sesión en la página principal.")
     st.stop()
 
-if st.session_state.rol != 'admin':
+if st.session_state.get("rol") != "admin":
     st.error("🔒 Acceso restringido. Solo administradores.")
     st.stop()
+
 
 st.header("📅 Historial de Compras")
 
@@ -90,3 +89,4 @@ else:
             file_name=f"historial_compras_{fecha_desde}_{fecha_hasta}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+        
