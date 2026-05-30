@@ -22,11 +22,14 @@ if "username" not in st.session_state:
 if "rol" not in st.session_state:
     st.session_state.rol = cookies.get("rol") or None
 
-
-
-if "logged_in" not in st.session_state or not st.session_state.logged_in or "rol" not in st.session_state:
+if not st.session_state.logged_in:
     st.warning("⚠️ Inicia sesión en la página principal.")
     st.stop()
+
+if st.session_state.get("rol") != "admin":
+    st.error("🔒 Acceso restringido. Solo administradores.")
+    st.stop()
+
 
 st.header("🏁 Cierre de Caja y Reporte Diario")
 
@@ -241,4 +244,4 @@ if st.session_state.rol == 'admin':
         st.info("Sin cierres registrados aún.")
     else:
         st.dataframe(df_hist, use_container_width=True, hide_index=True)
-    
+        
