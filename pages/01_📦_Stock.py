@@ -22,11 +22,10 @@ if "username" not in st.session_state:
 if "rol" not in st.session_state:
     st.session_state.rol = cookies.get("rol") or None
 
-
-
-if "logged_in" not in st.session_state or not st.session_state.logged_in or "rol" not in st.session_state:
+if not st.session_state.logged_in:
     st.warning("⚠️ Inicia sesión en la página principal.")
     st.stop()
+
 
 st.header("📦 Stock Actual")
 
@@ -111,4 +110,4 @@ else:
     if st.button("📄 Exportar PDF"):
         pdf_data = export_stock_to_pdf(df)
         st.download_button("⬇️ Descargar PDF", pdf_data, "stock_completo.pdf", "application/pdf")
-        
+                         
