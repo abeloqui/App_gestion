@@ -110,4 +110,4 @@ with tab_editar:
                 st.error(f"Error: {e}")
             finally:
                 conn.close()
-            
+                
