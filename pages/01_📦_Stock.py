@@ -8,7 +8,23 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import mm
 
-if "logged_in" not in st.session_state or not st.session_state.logged_in:
+from streamlit_cookies_manager import EncryptedCookieManager
+
+# --- COOKIES: restaurar sesión ---
+cookies = EncryptedCookieManager(prefix="dulcejazmin_", password="dj_secret_2024_$")
+if not cookies.ready():
+    st.stop()
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = cookies.get("logged_in") == "true"
+if "username" not in st.session_state:
+    st.session_state.username = cookies.get("username") or None
+if "rol" not in st.session_state:
+    st.session_state.rol = cookies.get("rol") or None
+
+
+
+if "logged_in" not in st.session_state or not st.session_state.logged_in or "rol" not in st.session_state:
     st.warning("⚠️ Inicia sesión en la página principal.")
     st.stop()
 
@@ -20,11 +36,11 @@ def export_stock_to_pdf(df):
     elements = []
     styles = getSampleStyleSheet()
     elements.append(Paragraph("<b>REPORTE DE STOCK - DULCE JAZMÍN</b>", styles['Title']))
-    data = [["Producto", "Categoría", "Unidad", "P. Venta", "Stock", "Mínimo"]]
+    data = [["Producto", "Categoría", "Unidad", "Cantidad", "Mínimo"]]
     for _, r in df.iterrows():
         data.append([r['nombre'], r['categoria'], r.get('unidad', '-'),
-                     f"${r['precio_venta']:.2f}", str(r['stock']), str(r['stock_minimo'])])
-    t = Table(data, colWidths=[50*mm, 30*mm, 20*mm, 25*mm, 20*mm, 20*mm])
+                     str(r['stock']), str(r['stock_minimo'])])
+    t = Table(data, colWidths=[55*mm, 35*mm, 20*mm, 25*mm, 25*mm])
     t.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.grey),
         ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
@@ -48,28 +64,48 @@ else:
     # Alerta general si hay productos bajo mínimo
     df_bajo = df[df['stock'] <= df['stock_minimo']]
     if not df_bajo.empty:
-        st.error(f"⚠️ {len(df_bajo)} producto(s) por debajo del stock mínimo.")
-        st.dataframe(df_bajo[['nombre', 'stock', 'stock_minimo', 'unidad']], 
-                     use_container_width=True, hide_index=True)
+        st.error(f"⚠️ {len(df_bajo)} producto(s) por debajo del mínimo.")
+        df_alerta = df_bajo[['nombre', 'stock', 'stock_minimo', 'unidad']].rename(
+            columns={'stock': 'cantidad', 'stock_minimo': 'mínimo'})
+        st.dataframe(df_alerta, use_container_width=True, hide_index=True)
         st.divider()
 
     st.subheader("Stock por Tipo")
-    tab_mp, tab_pre, tab_final = st.tabs(["📦 Materia Prima", "🔧 Preelaborado", "🏷️ Producto Final"])
+    tab_mp, tab_final = st.tabs(["📦 Materia Prima", "🏷️ Producto Final"])
 
-    for tab, subtipo in zip([tab_mp, tab_pre, tab_final], ["Materia Prima", "Preelaborado", "Producto Final"]):
-        with tab:
-            df_f = df[df["subcategoria"] == subtipo].copy()
-            if df_f.empty:
-                st.info(f"No hay {subtipo.lower()} cargado aún.")
-            else:
-                # Resaltar filas con stock crítico
-                def resaltar_critico(row):
-                    if row['stock'] <= row['stock_minimo']:
-                        return ['background-color: #ffcccc'] * len(row)
-                    return [''] * len(row)
+    # --- MATERIA PRIMA: sin precio ---
+    with tab_mp:
+        df_mp = df[df["subcategoria"] == "Materia Prima"].copy()
+        if df_mp.empty:
+            st.info("No hay materia prima cargada aún.")
+        else:
+            df_mp = df_mp[["nombre", "categoria", "unidad", "stock", "stock_minimo"]].rename(
+                columns={'stock': 'cantidad', 'stock_minimo': 'mínimo'})
 
-                styled = df_f[["nombre", "categoria", "unidad", "precio_venta", "stock", "stock_minimo"]].style.apply(resaltar_critico, axis=1)
-                st.dataframe(styled, use_container_width=True, hide_index=True)
+            def resaltar_mp(row):
+                if row['cantidad'] <= row['mínimo']:
+                    return ['background-color: #ffcccc'] * len(row)
+                return [''] * len(row)
+
+            styled_mp = df_mp.style.apply(resaltar_mp, axis=1)
+            st.dataframe(styled_mp, use_container_width=True, hide_index=True)
+
+    # --- PRODUCTO FINAL: con precio ---
+    with tab_final:
+        df_pf = df[df["subcategoria"] == "Producto Final"].copy()
+        if df_pf.empty:
+            st.info("No hay productos finales cargados aún.")
+        else:
+            df_pf = df_pf[["nombre", "categoria", "unidad", "precio_venta", "stock", "stock_minimo"]].rename(
+                columns={'precio_venta': 'precio', 'stock': 'cantidad', 'stock_minimo': 'mínimo'})
+
+            def resaltar_pf(row):
+                if row['cantidad'] <= row['mínimo']:
+                    return ['background-color: #ffcccc'] * len(row)
+                return [''] * len(row)
+
+            styled_pf = df_pf.style.apply(resaltar_pf, axis=1)
+            st.dataframe(styled_pf, use_container_width=True, hide_index=True)
 
     st.divider()
     if st.button("📄 Exportar PDF"):
