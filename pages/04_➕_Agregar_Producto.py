@@ -1,55 +1,114 @@
 import streamlit as st
+import pandas as pd
 from database import get_connection
 
-if "logged_in" not in st.session_state or not st.session_state.logged_in:
+from streamlit_cookies_manager import EncryptedCookieManager
+
+# --- COOKIES: restaurar sesión ---
+cookies = EncryptedCookieManager(prefix="dulcejazmin_", password="dj_secret_2024_$")
+if not cookies.ready():
+    st.stop()
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = cookies.get("logged_in") == "true"
+if "username" not in st.session_state:
+    st.session_state.username = cookies.get("username") or None
+if "rol" not in st.session_state:
+    st.session_state.rol = cookies.get("rol") or None
+
+
+
+if "logged_in" not in st.session_state or not st.session_state.logged_in or "rol" not in st.session_state:
     st.warning("⚠️ Inicia sesión.")
     st.stop()
 
-st.header("➕ Agregar Nuevo Producto")
-st.write("Completa los datos para dar de alta un producto en el sistema.")
+st.header("➕ Gestión de Productos")
 
-with st.form("new_product_form", clear_on_submit=True):
-    nombre = st.text_input("Nombre del Producto (Ej: Coca Cola 1.5L)")
-    categoria = st.selectbox("Categoría", ["Bebidas", "Almacén", "Limpieza", "Fiambrería", "Otros", "Materia Prima", "Reposteria", "Frutos Secos", "Lácteos", "Packaging"])
-    
-    subcategoria = st.selectbox(
-        "Tipo de Stock (importante)",
-        ["Materia Prima", "Preelaborado", "Producto Final"],
-        index=0,
-        help="Esto fracciona el stock como querías"
-    )
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        precio_venta = st.number_input("Precio de Venta al Público", min_value=0.0, step=0.01)
-        stock_inicial = st.number_input("Stock Inicial", min_value=0, step=1)
-    with col2:
-        precio_costo = st.number_input("Precio de Costo Inicial (CMP)", min_value=0.0, step=0.01)
-        stock_minimo = st.number_input("Alerta Stock Mínimo", min_value=1, value=5)
+tab_agregar, tab_editar = st.tabs(["➕ Agregar Producto", "✏️ Ver / Editar"])
 
-    if st.form_submit_button("💾 Guardar Producto"):
-        if nombre:
+with tab_agregar:
+    with st.form("new_product_form", clear_on_submit=True):
+        nombre = st.text_input("Nombre del Producto")
+        categoria = st.selectbox("Categoría", [
+            "Materia Prima", "Repostería", "Lácteos", "Frutos Secos",
+            "Packaging", "Bebidas", "Almacén", "Limpieza", "Otros"
+        ])
+        subcategoria = st.selectbox("Tipo de Stock", [
+            "Materia Prima", "Preelaborado", "Producto Final"
+        ], help="Define cómo se clasifica en el stock")
+
+        unidad = st.selectbox("Unidad de Medida", [
+            "kg", "gr", "lt", "ml", "unidad", "docena", "paquete"
+        ])
+
+        col1, col2 = st.columns(2)
+        with col1:
+            precio_venta = st.number_input("Precio de Venta ($)", min_value=0.0, step=0.01)
+            stock_inicial = st.number_input("Stock Inicial", min_value=0.0, step=0.1)
+        with col2:
+            precio_costo = st.number_input("Precio de Costo Inicial ($)", min_value=0.0, step=0.01)
+            stock_minimo = st.number_input("Stock Mínimo (alerta)", min_value=0.1, value=5.0, step=0.1)
+
+        if st.form_submit_button("💾 Guardar Producto"):
+            if not nombre.strip():
+                st.warning("El nombre del producto es obligatorio.")
+            else:
+                conn = get_connection()
+                cur = conn.cursor()
+                try:
+                    cur.execute("""
+                        INSERT INTO productos 
+                        (nombre, categoria, subcategoria, unidad, precio_venta, precio_costo, stock, stock_minimo, es_producido)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        nombre.strip(), categoria, subcategoria, unidad,
+                        precio_venta, precio_costo, stock_inicial, stock_minimo,
+                        subcategoria != "Materia Prima"
+                    ))
+                    conn.commit()
+                    st.success(f"✅ '{nombre}' agregado como {subcategoria}.")
+                except Exception as e:
+                    conn.rollback()
+                    if "unique" in str(e).lower():
+                        st.error(f"❌ Ya existe un producto con el nombre '{nombre}'.")
+                    else:
+                        st.error(f"❌ Error: {e}")
+                finally:
+                    conn.close()
+
+with tab_editar:
+    conn = get_connection()
+    df = pd.read_sql_query("""
+        SELECT nombre, categoria, subcategoria, unidad, precio_venta, precio_costo, stock, stock_minimo
+        FROM productos ORDER BY subcategoria, nombre
+    """, conn)
+    conn.close()
+
+    if df.empty:
+        st.info("No hay productos cargados aún.")
+    else:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.subheader("✏️ Editar Precio de Venta")
+        conn = get_connection()
+        df_sel = pd.read_sql_query("SELECT id, nombre, precio_venta FROM productos ORDER BY nombre", conn)
+        conn.close()
+
+        prod_edit = st.selectbox("Seleccioná un producto", df_sel['nombre'].tolist())
+        nuevo_precio = st.number_input("Nuevo Precio de Venta ($)", min_value=0.0, step=0.01)
+
+        if st.button("💾 Actualizar Precio"):
+            id_prod = int(df_sel[df_sel['nombre'] == prod_edit]['id'].values[0])
             conn = get_connection()
             cur = conn.cursor()
             try:
-                cur.execute("""
-                    INSERT INTO productos (nombre, categoria, subcategoria, precio_venta, precio_costo, stock, stock_minimo, es_producido)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    nombre, 
-                    categoria, 
-                    subcategoria, 
-                    precio_venta, 
-                    precio_costo, 
-                    stock_inicial, 
-                    stock_minimo,
-                    subcategoria != "Materia Prima"   # automático: preelaborado y final son producidos
-                ))
+                cur.execute("UPDATE productos SET precio_venta = %s WHERE id = %s", (nuevo_precio, id_prod))
                 conn.commit()
-                st.success(f"✅ Producto '{nombre}' agregado correctamente como **{subcategoria}**.")
+                st.success(f"✅ Precio de '{prod_edit}' actualizado a ${nuevo_precio:.2f}")
             except Exception as e:
-                st.error(f"❌ Error: El producto ya existe o hay un problema con la base de datos.")
+                conn.rollback()
+                st.error(f"Error: {e}")
             finally:
                 conn.close()
-        else:
-            st.warning("El nombre del producto es obligatorio.")
+            
